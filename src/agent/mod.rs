@@ -2,6 +2,14 @@ use anyhow::Result;
 
 use crate::output::GenerationResult;
 
+pub mod agnes_stream;
+pub mod approval;
+pub mod chat;
+pub mod context;
+pub mod runner;
+pub mod session;
+pub mod tools;
+
 pub trait TaskRouter {
     fn route_image(&self, prompt: &str, ratio: &str, inputs: &[String]) -> Result<GenerationResult>;
     fn route_video(&self, prompt: &str, ratio: &str, duration: f64, images: &[String]) -> Result<GenerationResult>;

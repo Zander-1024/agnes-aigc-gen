@@ -15,6 +15,14 @@ use crate::crypto;
 pub struct AppConfig {
     pub base_url: String,
     pub text_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_text_model: Option<String>,
+    #[serde(default = "default_chat_thinking")]
+    pub chat_thinking: bool,
+    #[serde(default = "default_chat_context_tokens")]
+    pub chat_context_tokens: u32,
+    #[serde(default = "default_chat_max_output_tokens")]
+    pub chat_max_output_tokens: u32,
     pub image_model: String,
     pub video_model: String,
     pub output_dir: String,
@@ -29,6 +37,10 @@ impl Default for AppConfig {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
             text_model: DEFAULT_TEXT_MODEL.to_string(),
+            thinking_text_model: None,
+            chat_thinking: DEFAULT_CHAT_THINKING,
+            chat_context_tokens: DEFAULT_CHAT_CONTEXT_TOKENS,
+            chat_max_output_tokens: DEFAULT_CHAT_MAX_OUTPUT_TOKENS,
             image_model: DEFAULT_IMAGE_MODEL.to_string(),
             video_model: DEFAULT_VIDEO_MODEL.to_string(),
             output_dir: DEFAULT_OUTPUT_DIR.to_string(),
@@ -97,6 +109,22 @@ impl AppConfig {
         match key {
             "base-url" | "base_url" => self.base_url = value.to_string(),
             "text-model" | "text_model" => self.text_model = value.to_string(),
+            "thinking-text-model" | "thinking_text_model" => {
+                self.thinking_text_model = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+            }
+            "chat-thinking" | "chat_thinking" => {
+                self.chat_thinking = parse_bool(value)?;
+            }
+            "chat-context-tokens" | "chat_context_tokens" => {
+                self.chat_context_tokens = parse_token_limit(value)?;
+            }
+            "chat-max-output-tokens" | "chat_max_output_tokens" => {
+                self.chat_max_output_tokens = parse_token_limit(value)?;
+            }
             "image-model" | "image_model" => self.image_model = value.to_string(),
             "video-model" | "video_model" => self.video_model = value.to_string(),
             "output-dir" | "output_dir" => self.output_dir = value.to_string(),
@@ -116,6 +144,18 @@ impl AppConfig {
     }
 }
 
+const fn default_chat_thinking() -> bool {
+    DEFAULT_CHAT_THINKING
+}
+
+const fn default_chat_context_tokens() -> u32 {
+    DEFAULT_CHAT_CONTEXT_TOKENS
+}
+
+const fn default_chat_max_output_tokens() -> u32 {
+    DEFAULT_CHAT_MAX_OUTPUT_TOKENS
+}
+
 struct ConfigKeyInfo {
     names: &'static str,
     description: &'static str,
@@ -126,6 +166,14 @@ const SETTABLE_KEYS: &[ConfigKeyInfo] = &[
     ConfigKeyInfo { names: "api-key", description: "API key (encrypted)", example: "sk-..." },
     ConfigKeyInfo { names: "base-url", description: "API gateway", example: DEFAULT_BASE_URL },
     ConfigKeyInfo { names: "text-model", description: "Text model", example: DEFAULT_TEXT_MODEL },
+    ConfigKeyInfo {
+        names: "thinking-text-model",
+        description: "Thinking text model (blank = text-model)",
+        example: DEFAULT_TEXT_MODEL,
+    },
+    ConfigKeyInfo { names: "chat-thinking", description: "Default chat thinking mode", example: "true" },
+    ConfigKeyInfo { names: "chat-context-tokens", description: "Chat context window tokens", example: "256k" },
+    ConfigKeyInfo { names: "chat-max-output-tokens", description: "Chat max output tokens", example: "64k" },
     ConfigKeyInfo { names: "image-model", description: "Image model", example: DEFAULT_IMAGE_MODEL },
     ConfigKeyInfo { names: "video-model", description: "Video model", example: DEFAULT_VIDEO_MODEL },
     ConfigKeyInfo { names: "output-dir", description: "Output dir (`.` = cwd)", example: "." },
@@ -187,6 +235,10 @@ fn current_value_for_key(cfg: &AppConfig, key: &str) -> String {
         }
         "base-url" => cfg.base_url.clone(),
         "text-model" => cfg.text_model.clone(),
+        "thinking-text-model" => cfg.thinking_text_model.clone().unwrap_or_else(|| "<text-model>".into()),
+        "chat-thinking" => cfg.chat_thinking.to_string(),
+        "chat-context-tokens" => cfg.chat_context_tokens.to_string(),
+        "chat-max-output-tokens" => cfg.chat_max_output_tokens.to_string(),
         "image-model" => cfg.image_model.clone(),
         "video-model" => cfg.video_model.clone(),
         "output-dir" => cfg.output_dir.clone(),
@@ -212,6 +264,39 @@ fn parse_bool(value: &str) -> Result<bool> {
         "true" | "1" | "yes" | "on" => Ok(true),
         "false" | "0" | "no" | "off" => Ok(false),
         _ => bail!("expected boolean, got {value}"),
+    }
+}
+
+pub fn parse_token_limit(value: &str) -> Result<u32> {
+    let value = value.trim().to_lowercase();
+    let (number, multiplier) = if let Some(raw) = value.strip_suffix('k') {
+        (raw.trim(), 1024u32)
+    } else {
+        (value.as_str(), 1u32)
+    };
+    let parsed: u32 = number.parse().context("token limit must be a positive number")?;
+    parsed.checked_mul(multiplier).context("token limit is too large")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_config_defaults_match_agent_plan() {
+        let cfg = AppConfig::default();
+
+        assert_eq!(cfg.thinking_text_model.as_deref(), None);
+        assert!(cfg.chat_thinking);
+        assert_eq!(cfg.chat_context_tokens, 262_144);
+        assert_eq!(cfg.chat_max_output_tokens, 65_536);
+    }
+
+    #[test]
+    fn token_limit_accepts_k_suffix() {
+        assert_eq!(parse_token_limit("256k").unwrap(), 262_144);
+        assert_eq!(parse_token_limit("64K").unwrap(), 65_536);
+        assert_eq!(parse_token_limit("1024").unwrap(), 1024);
     }
 }
 
@@ -241,6 +326,13 @@ pub fn run(cmd: ConfigCmd) -> Result<()> {
             let resolved_out = cfg.resolved_output_dir().ok();
             println!("base_url     = {}  ({BASE_URL_HELP})", cfg.base_url);
             println!("text_model   = {}", cfg.text_model);
+            println!(
+                "thinking_text_model = {}",
+                cfg.thinking_text_model.as_deref().unwrap_or("<text_model>")
+            );
+            println!("chat_thinking = {}", cfg.chat_thinking);
+            println!("chat_context_tokens = {}", cfg.chat_context_tokens);
+            println!("chat_max_output_tokens = {}", cfg.chat_max_output_tokens);
             println!("image_model  = {}", cfg.image_model);
             println!("video_model  = {}", cfg.video_model);
             println!("output_dir   = {}  ({OUTPUT_DIR_HELP})", cfg.output_dir);

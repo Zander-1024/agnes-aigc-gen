@@ -34,6 +34,7 @@ CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 | **Verbose** | Global `-v` / `--verbose` only |
 | **Downloads** | `--save` on command; not `config save-local` |
 | **`num_inference_steps`** | Not supported by CLI; never sent for image or video |
+| **Chat video tools** | Prefer async video submission; use task tools to follow progress |
 
 **Preconditions:** CLI on PATH, API key configured (see SETUP.md).
 
@@ -81,6 +82,7 @@ Do **not** assume `~/.config` on macOS.
 |------|---------|
 | `config.toml` | Settings + encrypted API key (must exist before API calls) |
 | `generations.db` | SQLite: `asset://` → remote URL, generation history |
+| `chat_sessions/*.json` | Chat TUI transcripts for `/sessions` and `--resume` |
 
 ### Image inputs (`-i` / `--input`)
 
@@ -258,10 +260,51 @@ agnes-aigc-gen history list
 
 ---
 
+## Agent chat
+
+```bash
+agnes-aigc-gen chat
+agnes-aigc-gen chat --prompt "Create image concepts, generate one, then submit i2v"
+agnes-aigc-gen chat --auto
+agnes-aigc-gen chat --no-thinking --context-tokens 128k --max-output-tokens 16k
+agnes-aigc-gen chat --resume <session-id>
+```
+
+Chat is a PI-based terminal agent with:
+
+- PI coding tools: `read`, `write`, `edit`, `bash`, `web_fetch`, `todo`, search/list tools
+- Agnes tools: `agnes_generate_image`, `agnes_submit_video`, `agnes_task_list/show/wait`, `agnes_asset_list/show`, `agnes_history_list/show`, `load_skill`
+- Slash commands: `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/compress`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`
+- TUI keys: `Tab` completes slash commands, `Shift-Tab` or `/approval toggle` switches approval mode (review ↔ auto; dangerous commands still reviewed in auto), `Ctrl-R` retries the previous request without adding another user message to session history, `Ctrl-T` toggles thinking details, `Ctrl-E` toggles tool-call details, `Ctrl-Q` quits
+- Approval panel: `←/→` selects Approve / Allow session / Deny, `Enter` confirms, `↑/↓` or `PgUp/PgDn` scrolls arguments; `y`/`a`/`n` shortcuts still work
+- Context: header shows context usage % and cache hit; auto-compresses session history at ≥90% (see [`docs/chat-context-compression.md`](../../docs/chat-context-compression.md)); `/compress` forces compression
+- Thinking and tool details are folded by default; expand them when auditing agent behavior
+- Chat completion requests automatically try up to 3 total attempts for retryable network failures, `408`, `429`, and `5xx` responses before surfacing an error
+
+Model defaults:
+
+| Setting | Default |
+|---------|---------|
+| `chat_thinking` | `true` |
+| `chat_context_tokens` | `262144` (`256k`) |
+| `chat_max_output_tokens` | `65536` (`64k`) |
+| `thinking_text_model` | fallback to `text_model` |
+
+Approval behavior:
+
+- Default mode reviews side-effecting tools and media generation.
+- `--auto` auto-approves non-dangerous calls.
+- Dangerous commands still require human approval, including force push, retagging, `git reset --hard`, `git clean`, `rm -rf`, `sudo`, `curl | sh`, publish/release commands, and writes outside the workspace.
+
+Video tool calls should use `agnes_submit_video`; it submits asynchronously and returns a local task id instead of blocking the conversation.
+
+---
+
 ## Models & endpoints
 
 | Type | Model | Endpoint |
 |------|-------|----------|
+| Chat | `agnes-2.0-flash` | `POST /v1/chat/completions` |
 | Image | `agnes-image-2.1-flash` | `POST /v1/images/generations` |
 | Video | `agnes-video-v2.0` | `POST /v1/videos` + poll |
 
@@ -293,4 +336,4 @@ agnes-aigc-gen history list
 
 ## Other commands
 
-`dashboard` (ratatui), `chat` (not implemented). Prefer `image` / `video` with JSON stdout for agents.
+`dashboard` (ratatui), `chat` (PI-based agent TUI). For non-interactive agents, prefer `image` / `video` with JSON stdout unless the task specifically needs the chat agent.

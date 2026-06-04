@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/i
 **Pin a version:**
 
 ```bash
-AGNES_AIGC_VERSION=0.2.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
+AGNES_AIGC_VERSION=0.3.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -39,7 +39,7 @@ install-remote.bat
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `AGNES_AIGC_VERSION` | latest release | e.g. `0.2.0` or `v0.2.0` |
+| `AGNES_AIGC_VERSION` | latest release | e.g. `0.3.0` or `v0.3.0` |
 | `AGNES_AIGC_REPO` | `Zander-1024/agnes-aigc-gen` | Override repo |
 | `INSTALL_BIN_DIR` | `~/.local/bin` (Unix) / `%USERPROFILE%\.local\bin` (Windows) | Binary install path |
 | `INSTALL_SKILL_DIR` | (unset) | If set, install skill **only** to this directory (overrides default) |
@@ -194,7 +194,11 @@ api_key_encrypted = "<base64 ciphertext; machine-bound>"
 | Field | Default | Description |
 |-------|---------|-------------|
 | `base_url` | `https://apihub.agnes-ai.com/v1` | API gateway |
-| `text_model` | `agnes-2.0-flash` | Text model (future) |
+| `text_model` | `agnes-2.0-flash` | Chat model |
+| `thinking_text_model` | (none) | Optional thinking chat model; fallback to `text_model` |
+| `chat_thinking` | `true` | Default chat thinking mode |
+| `chat_context_tokens` | `262144` | Chat context window (`256k`) |
+| `chat_max_output_tokens` | `65536` | Chat max output (`64k`) |
 | `image_model` | `agnes-image-2.1-flash` | Image model |
 | `video_model` | `agnes-video-v2.0` | Video model |
 | `output_dir` | `.` | Base dir for `--save` downloads |
@@ -209,6 +213,10 @@ api_key_encrypted = "<base64 ciphertext; machine-bound>"
 | `api-key` | `api_key_encrypted` |
 | `base-url` | `base_url` |
 | `text-model` | `text_model` |
+| `thinking-text-model` | `thinking_text_model` |
+| `chat-thinking` | `chat_thinking` |
+| `chat-context-tokens` | `chat_context_tokens` |
+| `chat-max-output-tokens` | `chat_max_output_tokens` |
 | `image-model` | `image_model` |
 | `video-model` | `video_model` |
 | `output-dir` | `output_dir` |

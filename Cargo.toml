@@ -1,6 +1,6 @@
 [package]
 name = "agnes-aigc-gen"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [[bin]]
@@ -17,15 +17,24 @@ crossterm = "0.28"
 dirs = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 ratatui = "0.29"
+ratatui-core = "0.1"
+tui-markdown = "0.3"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
 log = "0.4"
 env_logger = "0.11"
+async-stream = "0.3"
+async-trait = "0.1"
+eventsource-stream = "0.2"
+futures = "0.3"
+pi-agent = "1.0"
+pi-ai = "1.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 toml = "0.8"
 url = "2"
 

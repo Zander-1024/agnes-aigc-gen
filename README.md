@@ -10,6 +10,7 @@ CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) image and video 
 - **Batch images** — `-n` / `--count` 1–4 concurrent calls with partial-failure JSON
 - **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
 - **Asset history** — SQLite `asset://` references for image → video workflows
+- **Agent chat TUI** — PI-based terminal agent with tool calls, skills, approvals, thinking mode, and async video submission
 - **Encrypted config** — API key encrypted, machine-bound (see config dir in [SETUP.md](skills/agnes-aigc-gen/SETUP.md))
 - **Dashboard** — `agnes-aigc-gen dashboard` (ratatui terminal UI)
 - **Agent skill** — Cursor skill under `skills/agnes-aigc-gen/`
@@ -40,7 +41,7 @@ irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
 
-Pin version: `AGNES_AIGC_VERSION=0.2.0` before the curl/irm command.
+Pin version: `AGNES_AIGC_VERSION=0.3.0` before the curl/irm command.
 
 ### Source install (developers)
 
@@ -68,8 +69,8 @@ export PATH="$HOME/.local/bin:$PATH"
 Bump `version` in `Cargo.toml`, then:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Tag `v*` triggers multi-platform builds via `.github/workflows/release.yml`.
@@ -88,6 +89,11 @@ API key is encrypted in `{config_dir}/config.toml`. Full setup: [skills/agnes-ai
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `base_url` | `https://apihub.agnes-ai.com/v1` | Official Agnes API gateway |
+| `text_model` | `agnes-2.0-flash` | Chat model |
+| `thinking_text_model` | unset | Optional thinking model; falls back to `text_model` |
+| `chat_thinking` | `true` | Default chat thinking mode |
+| `chat_context_tokens` | `262144` | Chat context window |
+| `chat_max_output_tokens` | `65536` | Chat max output |
 | `output_dir` | `.` | Used with `--save` only |
 
 ## Usage
@@ -125,6 +131,12 @@ agnes-aigc-gen task wait 3              # block until complete
 
 # Dashboard
 agnes-aigc-gen dashboard
+
+# Agent chat TUI
+agnes-aigc-gen chat
+agnes-aigc-gen chat --prompt "Generate a portrait, then submit a short i2v video"
+agnes-aigc-gen chat --no-thinking --context-tokens 128k --max-output-tokens 16k
+agnes-aigc-gen chat --auto
 ```
 
 ### Image vs video inputs
@@ -149,6 +161,28 @@ Video does not upload local files or call the image API to stage frames. Generat
 | Video frame rate | `-f` / `--frame-rate`, 1–60 (default 24) |
 | Negative prompt | `--np` / `--negative-prompt` on video (top-level API field) |
 | Video async | `--async` submits task and returns local `id` + vendor `task_id`; use `task list` / `task show 3` |
+
+### Agent chat
+
+`agnes-aigc-gen chat` launches a PI-based terminal agent. It can use PI coding tools (`read`, `write`, `edit`, `bash`, `web_fetch`, `todo`) plus Agnes tools for image generation, async video submission, assets, history, tasks, and skill loading.
+
+Approval modes:
+
+| Mode | Behavior |
+|------|----------|
+| default | Reviews side-effecting tools and media generation |
+| `--auto` | Auto-approves non-dangerous calls |
+| dangerous commands | Always require human approval |
+
+Dangerous examples include force push, retagging, `git reset --hard`, `git clean`, `rm -rf`, `sudo`, `curl | sh`, publish/release commands, and writes outside the workspace.
+
+Useful slash commands in the TUI: `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`.
+
+TUI keys: `Tab` completes slash commands, `Ctrl-R` retries the previous request without adding another user message to session history, `Ctrl-T` toggles thinking details, `Ctrl-E` toggles tool-call details, and `Ctrl-Q` quits. Thinking and tool details are folded by default to keep the conversation readable.
+
+Chat completion requests automatically try up to 3 total attempts for retryable network failures, `408`, `429`, and `5xx` responses before surfacing an error.
+
+Video tool calls submit asynchronously by default and return a local task id. Use `/tasks` or the regular `task list/show/wait` commands to follow progress.
 
 See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](skills/agnes-aigc-gen/SETUP.md) (install & config).
 
@@ -211,7 +245,7 @@ docs/                    # Agnes API reference (image, video, text)
 scripts/                 # install-skill.sh / install-skill.ps1
 skills/agnes-aigc-gen/   # SKILL.md (usage) + SETUP.md (install & config)
 src/cli/                 # image, video, task, config, dashboard, chat
-src/ui/                  # ratatui dashboard
+src/ui/                  # ratatui dashboard + chat TUI
 src/api/                 # Agnes HTTP client
 install.sh               # source: cargo build + install
 install-remote.sh        # release: download from GitHub Releases (Unix)

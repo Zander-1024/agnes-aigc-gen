@@ -8,6 +8,7 @@ mod video;
 use anyhow::Result;
 use clap::Subcommand;
 
+pub use chat::ChatArgs;
 pub use image::ImageArgs;
 pub use video::VideoArgs;
 
@@ -27,8 +28,8 @@ pub enum Command {
     Config(crate::config::ConfigCmd),
     /// Launch terminal dashboard (ratatui)
     Dashboard,
-    /// Chat with Agnes agent (coming soon)
-    Chat,
+    /// Chat with Agnes agent
+    Chat(ChatArgs),
 }
 
 pub fn run(command: Command) -> Result<()> {
@@ -40,6 +41,6 @@ pub fn run(command: Command) -> Result<()> {
         Command::Asset(cmd) => history::run_asset(cmd),
         Command::Config(cmd) => crate::config::run(cmd),
         Command::Dashboard => dashboard::run(),
-        Command::Chat => chat::run(),
+        Command::Chat(args) => chat::run(args),
     }
 }

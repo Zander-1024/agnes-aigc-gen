@@ -1,4 +1,5 @@
 mod app;
+pub mod chat;
 
 use anyhow::Result;
 

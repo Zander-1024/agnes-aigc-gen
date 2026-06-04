@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 5
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -46,7 +48,7 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Upload release binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: agnes-aigc-gen-linux-x86_64
           path: target/release/agnes-aigc-gen

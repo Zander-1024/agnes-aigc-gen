@@ -140,11 +140,11 @@ impl Database {
         if self.table_has_column("video_tasks", "id")? {
             return Ok(());
         }
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='video_tasks'", [], |r| {
-                r.get(0)
-            })?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='video_tasks'",
+            [],
+            |r| r.get(0),
+        )?;
         if count == 0 {
             return Ok(());
         }

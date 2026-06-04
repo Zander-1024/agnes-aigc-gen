@@ -8,8 +8,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::api::ApiClient;
-use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoTaskResponse};
 use crate::api::image::resolve_image_seed;
+use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoTaskResponse};
 use crate::db::VideoTaskRecord;
 use crate::logging;
 use crate::media::input::ImageInput;
@@ -228,11 +228,7 @@ pub fn wait_video_task(
     poll_and_finalize(api, task_id, &req, None)
 }
 
-fn persist_task_from_response(
-    api: &ApiClient,
-    task_id: &str,
-    task: &VideoTaskResponse,
-) -> Result<VideoTaskRecord> {
+fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskResponse) -> Result<VideoTaskRecord> {
     let remote = task.result_url();
     let asset_id = if task.status == "completed" {
         if let Some(ref url) = remote {
@@ -254,7 +250,8 @@ fn persist_task_from_response(
             task.error.as_ref(),
         ),
         Err(_) => {
-            api.db.insert_video_task(task_id, &task.status, None, None, task.progress)?;
+            api.db
+                .insert_video_task(task_id, &task.status, None, None, task.progress)?;
             api.db.update_video_task(
                 task_id,
                 &task.status,
@@ -267,11 +264,7 @@ fn persist_task_from_response(
     }
 }
 
-fn resolve_or_create_video_asset(
-    api: &ApiClient,
-    task_id: &str,
-    url: &str,
-) -> Result<Option<String>> {
+fn resolve_or_create_video_asset(api: &ApiClient, task_id: &str, url: &str) -> Result<Option<String>> {
     if let Ok(existing) = api.db.get_video_task(task_id) {
         if let Some(ref asset_uri) = existing.asset_uri {
             if let Some(id) = asset_uri.strip_prefix("asset://") {
@@ -316,10 +309,7 @@ pub fn poll_video_task(api: &ApiClient, task_id: &str) -> Result<VideoTaskRespon
             }
             status => {
                 let wait = poll_interval(started.elapsed());
-                log::debug!(
-                    "video task {task_id} status={status}, next poll in {}s",
-                    wait.as_secs()
-                );
+                log::debug!("video task {task_id} status={status}, next poll in {}s", wait.as_secs());
                 thread::sleep(wait);
             }
         }
@@ -426,7 +416,10 @@ fn apply_video_frames(body: &mut VideoCreateRequest, frame_urls: Vec<String>) {
     }
 }
 
-fn video_frame_urls(resolved: &[String], client: &reqwest::blocking::Client) -> Result<(crate::ratio::Dimensions, Vec<String>)> {
+fn video_frame_urls(
+    resolved: &[String],
+    client: &reqwest::blocking::Client,
+) -> Result<(crate::ratio::Dimensions, Vec<String>)> {
     let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
     let urls: Vec<String> = classified
         .iter()
@@ -478,10 +471,7 @@ mod tests {
             seed: None,
             extra_body: None,
         };
-        apply_video_frames(
-            &mut body,
-            vec!["https://a/1.png".into(), "https://a/2.png".into()],
-        );
+        apply_video_frames(&mut body, vec!["https://a/1.png".into(), "https://a/2.png".into()]);
         assert!(body.image.is_none());
         let extra = body.extra_body.as_ref().unwrap();
         assert_eq!(extra.image.as_ref().unwrap().len(), 2);

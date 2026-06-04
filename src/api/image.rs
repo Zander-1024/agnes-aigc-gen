@@ -169,10 +169,7 @@ fn finish_image_result(
     let mut result = result;
     result.generation_id = Some(gen_id);
 
-    log::debug!(
-        "recorded asset={} generation_id={gen_id}",
-        asset.asset_uri
-    );
+    log::debug!("recorded asset={} generation_id={gen_id}", asset.asset_uri);
 
     if !req.quiet {
         result.print(req.output_format)?;

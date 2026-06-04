@@ -46,13 +46,9 @@ pub fn run(cmd: TaskCmd) -> Result<()> {
     match cmd.action {
         TaskAction::List { limit } => run_list(limit),
         TaskAction::Show { task_ref, output_format } => run_show(&task_ref, output_format),
-        TaskAction::Wait {
-            task_ref,
-            output_dir,
-            save,
-            retries,
-            output_format,
-        } => run_wait(task_ref, output_dir, save, retries, output_format),
+        TaskAction::Wait { task_ref, output_dir, save, retries, output_format } => {
+            run_wait(task_ref, output_dir, save, retries, output_format)
+        }
     }
 }
 

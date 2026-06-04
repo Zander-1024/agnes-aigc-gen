@@ -110,13 +110,9 @@ pub fn decrypt_api_key(encoded: &str) -> Result<String> {
     let key = derive_key()?;
     let cipher = Aes256Gcm::new_from_slice(&key).context("invalid cipher key")?;
     let nonce = Nonce::from_slice(nonce_bytes);
-    let plain = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "decryption failed; re-run on this machine: agnes-aigc-gen config set api-key <KEY>"
-            )
-        })?;
+    let plain = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+        anyhow::anyhow!("decryption failed; re-run on this machine: agnes-aigc-gen config set api-key <KEY>")
+    })?;
     String::from_utf8(plain).context("api key utf8")
 }
 

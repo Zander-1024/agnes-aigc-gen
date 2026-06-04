@@ -63,6 +63,8 @@ pub struct VideoTaskResponse {
     pub id: Option<String>,
     pub task_id: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub progress: Option<i32>,
     pub video_url: Option<String>,
     #[serde(default)]
     pub remixed_from_video_id: Option<String>,

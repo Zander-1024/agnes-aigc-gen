@@ -43,6 +43,7 @@ impl TaskRouter for LocalTaskRouter {
                 frame_rate: 24,
                 images: images.to_vec(),
                 task_id: None,
+                async_mode: false,
                 output_dir: None,
                 save_local: false,
                 max_retries: None,

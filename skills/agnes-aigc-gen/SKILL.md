@@ -176,6 +176,10 @@ agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
   -i asset://c8d4eb63a84b
 agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
 agnes-aigc-gen video --task-id task_xxxxxxxx
+agnes-aigc-gen video -p "Ocean sunset" --async   # submit only; returns task_id
+agnes-aigc-gen task list                         # recent tasks (default 10)
+agnes-aigc-gen task show task_xxxxxxxx           # one-shot API refresh
+agnes-aigc-gen task wait task_xxxxxxxx           # poll until done
 ```
 
 ### Input modes
@@ -199,7 +203,16 @@ All frame URLs must share the same aspect ratio. CLI does **not** upload local f
 | ≤ 2 min | 30s |
 | > 2 min | 15s |
 
-Wait for command to finish; queued tasks are normal.
+Wait for command to finish; queued tasks are normal. Use `--async` to submit without waiting; track with `task list` / `task show` / `task wait`.
+
+### Video async tasks
+
+| Command | Purpose |
+|---------|---------|
+| `video --async` | Submit task, print `task_id`, record in SQLite |
+| `task list [-n N]` | Last N tasks: phase (`processing` / `success` / `failed`), URI when done |
+| `task show <id>` | One GET refresh from API, update local record |
+| `task wait <id>` | Same as `video --task-id` (block until complete) |
 
 ### Video flags
 
@@ -212,6 +225,8 @@ Wait for command to finish; queued tasks are normal.
 | `-d` / `--duration` | `5` | ≤ max duration |
 | `-f` / `--frame-rate` | `24` | **1–60** |
 | `-i` / `--image` | — | HTTPS URL or `asset://` only |
+| `--async` | off | Submit without polling |
+| `--task-id` | — | Poll existing task (sync) |
 | `--save` | off | |
 
 ---

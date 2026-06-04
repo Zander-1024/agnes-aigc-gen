@@ -116,6 +116,13 @@ agnes-aigc-gen video -p "Subtle motion" -d 3 \
 # Verbose polling logs
 agnes-aigc-gen -v video -p "Ocean waves" --ratio 16:9 -d 5
 
+# Async video: submit and return task_id immediately
+agnes-aigc-gen video -p "Ocean waves" --ratio 16:9 -d 5 --async
+agnes-aigc-gen task list              # recent tasks (default 10)
+agnes-aigc-gen task list -n 20
+agnes-aigc-gen task show task_xxxxxxxx  # refresh status from API
+agnes-aigc-gen task wait task_xxxxxxxx  # block until complete
+
 # Dashboard
 agnes-aigc-gen dashboard
 ```
@@ -141,6 +148,7 @@ Video does not upload local files or call the image API to stage frames. Generat
 | Video duration | max `floor(441 / frame_rate)` seconds (18s @ 24 fps) |
 | Video frame rate | `-f` / `--frame-rate`, 1–60 (default 24) |
 | Negative prompt | `--np` / `--negative-prompt` on video (top-level API field) |
+| Video async | `--async` submits task and returns; use `task list` / `task show` / `task wait` |
 
 See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](skills/agnes-aigc-gen/SETUP.md) (install & config).
 
@@ -202,7 +210,7 @@ cargo run -- config show
 docs/                    # Agnes API reference (image, video, text)
 scripts/                 # install-skill.sh / install-skill.ps1
 skills/agnes-aigc-gen/   # SKILL.md (usage) + SETUP.md (install & config)
-src/cli/                 # image, video, config, dashboard, chat
+src/cli/                 # image, video, task, config, dashboard, chat
 src/ui/                  # ratatui dashboard
 src/api/                 # Agnes HTTP client
 install.sh               # source: cargo build + install

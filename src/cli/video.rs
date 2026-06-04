@@ -37,9 +37,13 @@ pub struct VideoArgs {
     #[arg(short = 'i', long = "image")]
     pub images: Vec<String>,
 
-    /// Poll an existing task by ID
+    /// Poll an existing task by ID (blocks until complete)
     #[arg(long = "task-id")]
     pub task_id: Option<String>,
+
+    /// Submit video task and return immediately (use `task show` / `task wait` to follow up)
+    #[arg(long = "async")]
+    pub async_mode: bool,
 
     #[arg(long = "output-dir")]
     pub output_dir: Option<String>,
@@ -83,6 +87,7 @@ pub fn run(args: VideoArgs) -> Result<()> {
     }
 
     let api = ApiClient::with_overrides(cfg, args.output_dir.clone(), None, args.retries)?;
+    let async_mode = args.async_mode && args.task_id.is_none();
 
     generate_video(
         &api,
@@ -95,6 +100,7 @@ pub fn run(args: VideoArgs) -> Result<()> {
             frame_rate: args.frame_rate,
             images: args.images,
             task_id: args.task_id,
+            async_mode,
             output_dir: args.output_dir,
             save_local: args.save,
             max_retries: args.retries,

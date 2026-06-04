@@ -35,6 +35,38 @@ pub struct GenerationRecord {
     pub created_at: String,
 }
 
+/// Local record of an Agnes video async task (`POST /videos` → poll `GET /videos/{id}`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoTaskRecord {
+    pub task_id: String,
+    /// API status: `queued`, `in_progress`, `completed`, `failed`
+    pub status: String,
+    /// Normalized: `processing`, `success`, or `failed`
+    pub phase: String,
+    pub prompt: Option<String>,
+    pub input_json: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<Value>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl VideoTaskRecord {
+    pub fn phase_from_status(status: &str) -> &'static str {
+        match status {
+            "completed" => "success",
+            "failed" => "failed",
+            _ => "processing",
+        }
+    }
+}
+
 impl Database {
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
@@ -77,6 +109,22 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_generations_created ON generations(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_assets_created ON assets(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS video_tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                prompt TEXT,
+                input_json TEXT,
+                progress INTEGER,
+                video_url TEXT,
+                asset_id TEXT,
+                error_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (asset_id) REFERENCES assets(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_video_tasks_updated ON video_tasks(updated_at DESC);
             ",
         )?;
         Ok(())
@@ -217,6 +265,87 @@ impl Database {
         })?;
         rows.collect::<Result<Vec<_>, _>>().context("list assets")
     }
+
+    pub fn insert_video_task(
+        &self,
+        task_id: &str,
+        status: &str,
+        prompt: Option<&str>,
+        input: Option<&Value>,
+        progress: Option<i32>,
+    ) -> Result<VideoTaskRecord> {
+        let now = Utc::now().to_rfc3339();
+        let input_json = input.map(|v| serde_json::to_string(v)).transpose()?;
+        self.conn.execute(
+            "INSERT INTO video_tasks (task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, ?6, ?6)",
+            params![task_id, status, prompt, input_json, progress, now],
+        )?;
+        self.get_video_task(task_id)
+    }
+
+    pub fn update_video_task(
+        &self,
+        task_id: &str,
+        status: &str,
+        progress: Option<i32>,
+        video_url: Option<&str>,
+        asset_id: Option<&str>,
+        error: Option<&Value>,
+    ) -> Result<VideoTaskRecord> {
+        let updated_at = Utc::now().to_rfc3339();
+        let error_json = error.map(|v| serde_json::to_string(v)).transpose()?;
+        self.conn.execute(
+            "UPDATE video_tasks SET status = ?2, progress = ?3, video_url = ?4, asset_id = ?5, error_json = ?6, updated_at = ?7
+             WHERE task_id = ?1",
+            params![task_id, status, progress, video_url, asset_id, error_json, updated_at],
+        )?;
+        self.get_video_task(task_id)
+    }
+
+    pub fn get_video_task(&self, task_id: &str) -> Result<VideoTaskRecord> {
+        self.conn
+            .query_row(
+                "SELECT task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+                 FROM video_tasks WHERE task_id = ?1",
+                params![task_id],
+                |row| map_video_task_row(row),
+            )
+            .with_context(|| format!("video task not found: {task_id}"))
+    }
+
+    pub fn list_video_tasks(&self, limit: usize) -> Result<Vec<VideoTaskRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+             FROM video_tasks ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| map_video_task_row(row))?;
+        rows.collect::<Result<Vec<_>, _>>().context("list video tasks")
+    }
+}
+
+fn map_video_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoTaskRecord> {
+    let status: String = row.get(1)?;
+    let asset_id: Option<String> = row.get(6)?;
+    Ok(VideoTaskRecord {
+        task_id: row.get(0)?,
+        phase: VideoTaskRecord::phase_from_status(&status).to_string(),
+        status,
+        prompt: row.get(2)?,
+        input_json: row
+            .get::<_, Option<String>>(3)?
+            .map(|s| parse_json_col(s))
+            .transpose()?,
+        progress: row.get(4)?,
+        uri: row.get(5)?,
+        asset_uri: asset_id.map(|id| format!("asset://{id}")),
+        error: row
+            .get::<_, Option<String>>(7)?
+            .map(|s| parse_json_col(s))
+            .transpose()?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
 }
 
 fn parse_json_col(raw: String) -> rusqlite::Result<Value> {
@@ -251,5 +380,27 @@ mod tests {
             db.resolve_reference(&asset.asset_uri).unwrap(),
             "https://example.com/a.png"
         );
+    }
+
+    #[test]
+    fn video_task_roundtrip() {
+        let db = open_mem();
+        let row = db
+            .insert_video_task("task_abc", "queued", Some("ocean"), None, Some(0))
+            .unwrap();
+        assert_eq!(row.phase, "processing");
+        let updated = db
+            .update_video_task(
+                "task_abc",
+                "completed",
+                Some(100),
+                Some("https://example.com/v.mp4"),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(updated.phase, "success");
+        assert_eq!(updated.uri.as_deref(), Some("https://example.com/v.mp4"));
+        assert_eq!(db.list_video_tasks(10).unwrap().len(), 1);
     }
 }

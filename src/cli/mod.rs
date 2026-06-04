@@ -2,6 +2,7 @@ mod chat;
 mod dashboard;
 mod history;
 mod image;
+mod task;
 mod video;
 
 use anyhow::Result;
@@ -16,6 +17,8 @@ pub enum Command {
     Image(ImageArgs),
     /// Generate videos via Agnes Video API
     Video(VideoArgs),
+    /// List/show/wait video async tasks
+    Task(task::TaskCmd),
     /// List/show generation history (SQLite)
     History(history::HistoryCmd),
     /// List/show assets in the resource library (asset://)
@@ -32,6 +35,7 @@ pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Image(args) => image::run(args),
         Command::Video(args) => video::run(args),
+        Command::Task(cmd) => task::run(cmd),
         Command::History(cmd) => history::run_history(cmd),
         Command::Asset(cmd) => history::run_asset(cmd),
         Command::Config(cmd) => crate::config::run(cmd),

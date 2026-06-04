@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use log;
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
 use crate::config::AppConfig;
@@ -74,10 +73,7 @@ fn run_list(limit: usize) -> Result<()> {
     }
 
     let rows = db.list_video_tasks(limit)?;
-    println!(
-        "{:<4} {:<10} {:<11} {:<10} {}",
-        "ID", "TASK_ID", "PHASE", "PROMPT", "URI"
-    );
+    println!("{:<4} {:<10} {:<11} {:<10} URI", "ID", "TASK_ID", "PHASE", "PROMPT");
     for row in rows {
         let prompt = truncate_display(&row.prompt.unwrap_or_default(), 10);
         let task_id = truncate_display(&row.task_id, 10);

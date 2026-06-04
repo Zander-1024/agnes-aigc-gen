@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Args;
-use log;
 
 use crate::api::{ApiClient, VideoRequest, generate_video};
 use crate::cli::task::resolve_task_ref;

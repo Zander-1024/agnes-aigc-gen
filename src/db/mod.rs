@@ -333,7 +333,7 @@ impl Database {
         progress: Option<i32>,
     ) -> Result<VideoTaskRecord> {
         let now = Utc::now().to_rfc3339();
-        let input_json = input.map(|v| serde_json::to_string(v)).transpose()?;
+        let input_json = input.map(serde_json::to_string).transpose()?;
         self.conn.execute(
             "INSERT INTO video_tasks (task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, ?6, ?6)",
@@ -352,7 +352,7 @@ impl Database {
         error: Option<&Value>,
     ) -> Result<VideoTaskRecord> {
         let updated_at = Utc::now().to_rfc3339();
-        let error_json = error.map(|v| serde_json::to_string(v)).transpose()?;
+        let error_json = error.map(serde_json::to_string).transpose()?;
         self.conn.execute(
             "UPDATE video_tasks SET status = ?2, progress = ?3, video_url = ?4, asset_id = ?5, error_json = ?6, updated_at = ?7
              WHERE task_id = ?1",
@@ -367,7 +367,7 @@ impl Database {
                 "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
                  FROM video_tasks WHERE task_id = ?1",
                 params![task_id],
-                |row| map_video_task_row(row),
+                map_video_task_row,
             )
             .with_context(|| format!("video task not found: {task_id}"))
     }
@@ -378,7 +378,7 @@ impl Database {
                 "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
                  FROM video_tasks WHERE id = ?1",
                 params![local_id],
-                |row| map_video_task_row(row),
+                map_video_task_row,
             )
             .with_context(|| format!("video task #{local_id} not found"))
     }
@@ -402,7 +402,7 @@ impl Database {
             "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
              FROM video_tasks ORDER BY updated_at DESC LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| map_video_task_row(row))?;
+        let rows = stmt.query_map(params![limit as i64], map_video_task_row)?;
         rows.collect::<Result<Vec<_>, _>>().context("list video tasks")
     }
 }
@@ -416,17 +416,11 @@ fn map_video_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoTaskReco
         phase: VideoTaskRecord::phase_from_status(&status).to_string(),
         status,
         prompt: row.get(3)?,
-        input_json: row
-            .get::<_, Option<String>>(4)?
-            .map(|s| parse_json_col(s))
-            .transpose()?,
+        input_json: row.get::<_, Option<String>>(4)?.map(parse_json_col).transpose()?,
         progress: row.get(5)?,
         uri: row.get(6)?,
         asset_uri: asset_id.map(|id| format!("asset://{id}")),
-        error: row
-            .get::<_, Option<String>>(8)?
-            .map(|s| parse_json_col(s))
-            .transpose()?,
+        error: row.get::<_, Option<String>>(8)?.map(parse_json_col).transpose()?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
     })

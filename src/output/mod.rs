@@ -10,8 +10,6 @@ use reqwest::blocking::Client;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use log;
-
 pub const MAX_IMAGE_BATCH_COUNT: u32 = 4;
 
 #[derive(Debug, Clone, Serialize)]

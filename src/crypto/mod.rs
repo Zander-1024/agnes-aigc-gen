@@ -25,12 +25,11 @@ fn platform_machine_uuid() -> Result<String> {
     }
     let stdout = String::from_utf8(output.stdout).context("decode ioreg output")?;
     for line in stdout.lines() {
-        if line.contains("IOPlatformUUID") {
-            if let Some(uuid) = line.split('"').nth(3) {
-                if !uuid.is_empty() {
-                    return Ok(uuid.to_string());
-                }
-            }
+        if line.contains("IOPlatformUUID")
+            && let Some(uuid) = line.split('"').nth(3)
+            && !uuid.is_empty()
+        {
+            return Ok(uuid.to_string());
         }
     }
     bail!("IOPlatformUUID not found")

@@ -2,7 +2,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use log;
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::json;
@@ -265,12 +264,11 @@ fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskRe
 }
 
 fn resolve_or_create_video_asset(api: &ApiClient, task_id: &str, url: &str) -> Result<Option<String>> {
-    if let Ok(existing) = api.db.get_video_task(task_id) {
-        if let Some(ref asset_uri) = existing.asset_uri {
-            if let Some(id) = asset_uri.strip_prefix("asset://") {
-                return Ok(Some(id.to_string()));
-            }
-        }
+    if let Ok(existing) = api.db.get_video_task(task_id)
+        && let Some(ref asset_uri) = existing.asset_uri
+        && let Some(id) = asset_uri.strip_prefix("asset://")
+    {
+        return Ok(Some(id.to_string()));
     }
     let asset = api.db.insert_asset("video", url, None, None)?;
     Ok(Some(asset.id))

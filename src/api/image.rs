@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, bail};
-use log;
 use serde_json::json;
 
 use crate::api::ApiClient;

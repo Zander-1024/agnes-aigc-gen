@@ -134,7 +134,7 @@ pub const MIN_VIDEO_FRAMES: u32 = 9;
 
 /// Snap frame count to nearest valid 8n+1 (max [`MAX_VIDEO_FRAMES`]).
 pub fn snap_num_frames(requested: u32) -> u32 {
-    let clamped = requested.min(MAX_VIDEO_FRAMES).max(MIN_VIDEO_FRAMES);
+    let clamped = requested.clamp(MIN_VIDEO_FRAMES, MAX_VIDEO_FRAMES);
     let n = ((clamped as i32 - 1) / 8) as u32;
     let lower = 8 * n + 1;
     let upper = 8 * (n + 1) + 1;

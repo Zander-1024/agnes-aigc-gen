@@ -3,7 +3,6 @@ use std::thread;
 
 use anyhow::Result;
 use clap::Args;
-use log;
 
 use crate::api::{ApiClient, ImageRequest, generate_image};
 use crate::config::AppConfig;

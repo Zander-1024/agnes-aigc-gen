@@ -139,7 +139,7 @@ const SETTABLE_KEYS: &[ConfigKeyInfo] = &[
 
 fn print_settable_keys(highlight: Option<&str>) -> Result<()> {
     let cfg = AppConfig::load().unwrap_or_default();
-    let highlight = highlight.map(|s| normalize_key(s));
+    let highlight = highlight.map(normalize_key);
 
     if let Some(ref key) = highlight {
         if let Some(info) = SETTABLE_KEYS.iter().find(|k| key_matches(k, key)) {

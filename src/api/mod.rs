@@ -8,7 +8,6 @@ pub use video::{VideoRequest, generate_video, refresh_video_task, wait_video_tas
 use std::time::Duration;
 
 use anyhow::Result;
-use log;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 

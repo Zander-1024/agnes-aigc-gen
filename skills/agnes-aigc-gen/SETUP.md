@@ -16,19 +16,19 @@ Downloads a prebuilt binary from [GitHub Releases](https://github.com/Zander-102
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Pin a version:**
 
 ```bash
-AGNES_AIGC_VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.sh | bash
+AGNES_AIGC_VERSION=0.2.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.ps1 | iex
+irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.ps1 | iex
 ```
 
 **Windows (cmd, from cloned repo):**
@@ -39,7 +39,7 @@ install-remote.bat
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `AGNES_AIGC_VERSION` | latest release | e.g. `0.1.0` or `v0.1.0` |
+| `AGNES_AIGC_VERSION` | latest release | e.g. `0.2.0` or `v0.2.0` |
 | `AGNES_AIGC_REPO` | `Zander-1024/agnes-aigc-gen` | Override repo |
 | `INSTALL_BIN_DIR` | `~/.local/bin` (Unix) / `%USERPROFILE%\.local\bin` (Windows) | Binary install path |
 | `INSTALL_SKILL_DIR` | (unset) | If set, install skill **only** to this directory (overrides default) |
@@ -131,9 +131,9 @@ Skip skill install: `SKIP_SKILL=1 ./install-remote.sh`
 
 ```bash
 mkdir -p ~/.agents/skills/agnes-aigc-gen
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/skills/agnes-aigc-gen/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/skills/agnes-aigc-gen/SKILL.md \
   -o ~/.agents/skills/agnes-aigc-gen/SKILL.md
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/skills/agnes-aigc-gen/SETUP.md \
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/skills/agnes-aigc-gen/SETUP.md \
   -o ~/.agents/skills/agnes-aigc-gen/SETUP.md
 ```
 

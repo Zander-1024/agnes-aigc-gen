@@ -29,13 +29,13 @@ Downloads the latest binary from [GitHub Releases](https://github.com/Zander-102
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.ps1 | iex
+irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.ps1 | iex
 ```
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.

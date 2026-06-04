@@ -1,6 +1,6 @@
 # Install agnes-aigc-gen from GitHub Releases (Windows).
 # One-liner (PowerShell):
-#   irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.ps1 | iex
+#   irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:AGNES_AIGC_REPO) { $env:AGNES_AIGC_REPO } else { "Zander-1024/agnes-aigc-gen" }

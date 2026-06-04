@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install agnes-aigc-gen from GitHub Releases (default).
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 set -euo pipefail
 
 REPO="${AGNES_AIGC_REPO:-Zander-1024/agnes-aigc-gen}"

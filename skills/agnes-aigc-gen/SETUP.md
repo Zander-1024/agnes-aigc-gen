@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/i
 **Pin a version:**
 
 ```bash
-AGNES_AIGC_VERSION=0.3.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
+AGNES_AIGC_VERSION=0.3.1 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -39,7 +39,7 @@ install-remote.bat
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `AGNES_AIGC_VERSION` | latest release | e.g. `0.3.0` or `v0.3.0` |
+| `AGNES_AIGC_VERSION` | latest release | e.g. `0.3.1` or `v0.3.1` |
 | `AGNES_AIGC_REPO` | `Zander-1024/agnes-aigc-gen` | Override repo |
 | `INSTALL_BIN_DIR` | `~/.local/bin` (Unix) / `%USERPROFILE%\.local\bin` (Windows) | Binary install path |
 | `INSTALL_SKILL_DIR` | (unset) | If set, install skill **only** to this directory (overrides default) |

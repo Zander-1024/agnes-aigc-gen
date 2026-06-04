@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
 
-Pin version: `AGNES_AIGC_VERSION=0.3.0` before the curl/irm command.
+Pin version: `AGNES_AIGC_VERSION=0.3.1` before the curl/irm command.
 
 ### Source install (developers)
 
@@ -69,8 +69,8 @@ export PATH="$HOME/.local/bin:$PATH"
 Bump `version` in `Cargo.toml`, then:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 Tag `v*` triggers multi-platform builds via `.github/workflows/release.yml`.

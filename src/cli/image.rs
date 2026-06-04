@@ -13,23 +13,23 @@ use crate::ratio::AspectRatio;
 #[derive(Args)]
 pub struct ImageArgs {
     /// Text prompt for generation or editing
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "prompt")]
     pub prompt: String,
 
     /// Aspect ratio (e.g. 16:9, 1:1, 4:3)
-    #[arg(short = 'r', long, default_value = "1:1")]
+    #[arg(short = 'r', long = "ratio", default_value = "1:1")]
     pub ratio: String,
 
     /// Number of images to generate (concurrent API calls, max 4)
-    #[arg(short = 'n', long, default_value_t = 1)]
+    #[arg(short = 'n', long = "count", default_value_t = 1)]
     pub count: u32,
 
-    /// Fixed seed for generation (0–999). Omit for random perturbation in 0–999 per call.
-    #[arg(long)]
+    /// Fixed seed for generation (0–999). Omit for random perturbation in 0–999 per call. Not compatible with --count > 1.
+    #[arg(short = 's', long = "seed")]
     pub seed: Option<u32>,
 
-    /// Input image(s): local path, URL, asset://, or base64
-    #[arg(short, long = "input")]
+    /// Input image(s): local path, URL, asset://, base64, or data URI
+    #[arg(short = 'i', long = "input")]
     pub inputs: Vec<String>,
 
     /// Override output directory
@@ -53,6 +53,10 @@ pub fn run(args: ImageArgs) -> Result<()> {
     anyhow::ensure!(
         (1..=MAX_IMAGE_BATCH_COUNT).contains(&args.count),
         "count must be 1–{MAX_IMAGE_BATCH_COUNT}"
+    );
+    anyhow::ensure!(
+        args.count == 1 || args.seed.is_none(),
+        "--seed / -s cannot be used with --count / -n > 1; omit seed for batch generation"
     );
 
     let cfg = AppConfig::load()?;

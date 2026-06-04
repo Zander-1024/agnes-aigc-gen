@@ -45,6 +45,10 @@ pub struct VideoCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub negative_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<ExtraBodyVideo>,
 }
 
@@ -52,8 +56,6 @@ pub struct VideoCreateRequest {
 pub struct ExtraBodyVideo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

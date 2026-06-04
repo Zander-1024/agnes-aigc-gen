@@ -1,395 +1,231 @@
 ---
 name: agnes-aigc-gen
 description: >-
-  Generates images and videos through the Agnes AI API via the agnes-aigc-gen CLI.
-  Use when the user wants Agnes image/video generation, batch images, image-to-video
-  with asset:// links, API key configuration, or agnes-aigc-gen commands in agent workflows.
-  Read this skill before calling the CLI to avoid invalid flags, ratio/duration errors,
-  wrong output assumptions, or missing file dependencies (config.toml, generations.db,
-  input paths, platform-specific config directory).
+  Generates images and videos through the agnes-aigc-gen CLI (Agnes AI API).
+  Use when calling image/video generation, batch images, image-to-video with asset://,
+  or parsing CLI JSON output. For installing the tool, skill, or API key setup, read
+  SETUP.md in the same directory — not this file.
 ---
 
 # agnes-aigc-gen
 
-CLI for [Agnes AI](https://agnes-ai.com) image and video generation (OpenAI-compatible gateway).
+CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 
-## Quick checklist (read before every call)
+> **Install & config:** see [SETUP.md](./SETUP.md) in this directory.
+> **API reference:** see `docs/agnes-image-2.1-flash.md`, `docs/agnes-video-v2.0.md` in the repo root.
+
+## Quick checklist (before every call)
 
 | Rule | Detail |
 |------|--------|
-| **Never pass `--size`** | Use `--ratio` only; pixel size is derived automatically |
+| **Never pass `--size`** | Use `--ratio` only |
 | **Image ratios** | Only `1:1`, `4:3`, `3:4`, `16:9`, `9:16` |
-| **Video images flag** | Use `-i` / `--image`, **not** `--first-frame`, `--keyframes`, or `--input` |
-| **Batch count `-n`** | **Image only**, integer **1–4**; not supported on video |
-| **Seed** | Image only; **0–999** if set; omit for random per call |
-| **Default output** | `uri` = **remote HTTPS URL**; no local download unless `--save` |
-| **Video duration cap** | `max_seconds = floor(441 / frame_rate)`; default fps **24** → max **18s** |
-| **Video prompt** | Required unless polling with `--task-id` |
-| **Chain image → video** | Pass prior `asset_uri` as `-i asset://<id>` |
-| **Verbose logs** | Only with global `-v` / `--verbose`; otherwise silent on stderr |
-| **Do not rely on `config save-local`** | Image/video download is controlled only by `--save` on the command |
+| **Image inputs** | Local path, HTTPS URL, `asset://`, base64, **data URI** (i2i) |
+| **Video inputs** | **HTTPS URL or `asset://` only** — no local path, base64, or data URI |
+| **Video images** | `-i` / `--image` only (not `--input`, `--first-frame`, `--keyframes`) |
+| **Batch `-n`** | Image only, **1–4**, concurrent; **mutually exclusive with `--seed`** |
+| **Image seed** | `-s` / `--seed`, **0–999** or omit (random per call) |
+| **Video seed** | `-s` / `--seed`, **0–999** or omit (not sent to API) |
+| **Default `uri`** | Remote HTTPS URL; `--save` for local file |
+| **Video max duration** | `floor(441 / frame_rate)`; 24 fps → max **18s** |
+| **Video `frame_rate`** | **1–60** (default 24) |
+| **Video prompt** | Required unless `--task-id` |
+| **Chain i2v** | Generate image first → use `asset_uri` as `-i asset://<id>` |
+| **Verbose** | Global `-v` / `--verbose` only |
+| **Downloads** | `--save` on command; not `config save-local` |
+| **`num_inference_steps`** | Not supported by CLI; never sent for image or video |
 
-## Prerequisites
+**Preconditions:** CLI on PATH, API key configured (see SETUP.md).
 
-```bash
-agnes-aigc-gen config set api-key YOUR_API_KEY
-agnes-aigc-gen config show
-```
+## Flag conventions
 
-- Config dir: see **File dependencies** (macOS ≠ `~/.config`)
-- Default base URL: `https://apihub.agnes-ai.com/v1`
-- History DB: `{config_dir}/generations.db`
+Every option has a **long form** (`--prompt`, `--ratio`, …). Short forms (`-p`, `-r`, …) are optional shortcuts where defined.
 
-Re-set API key after machine change if decryption fails.
+| Command | Short | Long |
+|---------|-------|------|
+| image | `-p` | `--prompt` |
+| image | `-r` | `--ratio` |
+| image | `-n` | `--count` |
+| image | `-s` | `--seed` |
+| image | `-i` | `--input` |
+| video | `-p` | `--prompt` |
+| video | `--np` | `--negative-prompt` |
+| video | `-s` | `--seed` |
+| video | `-r` | `--ratio` |
+| video | `-d` | `--duration` |
+| video | `-f` | `--frame-rate` |
+| video | `-i` | `--image` |
 
-## File dependencies
-
-Agents must understand which paths are read, written, or required at runtime. **Do not assume `~/.config` on every OS** — the CLI uses the platform config directory from the `dirs` crate.
-
-### Config & state directory
-
-| OS | Path |
-|----|------|
-| macOS | `~/Library/Application Support/agnes-aigc-gen/` |
-| Linux | `~/.config/agnes-aigc-gen/` |
-| Windows | `%APPDATA%\agnes-aigc-gen\` (Roaming) |
-
-Created automatically on first run (`config set`, generation, or DB access).
-
-### Files managed by the CLI
-
-| File | Access | Purpose |
-|------|--------|---------|
-| `{config_dir}/config.toml` | read / write | Settings + **encrypted** `api_key_encrypted` (machine-bound; **no** `machine_id` stored) |
-| `{config_dir}/generations.db` | read / write | SQLite: `assets` (id → remote URL), `generations` (history) |
-
-**`asset://` resolution** reads `generations.db` only. If the DB is missing, deleted, or the id was never recorded, `asset://…` lookups fail.
-
-### Machine binding (runtime OS reads, not config files)
-
-API key encryption/decryption derives a key from the **current machine** at runtime. These OS sources are read when encrypting or decrypting; they are **never written to `config.toml`**:
-
-| OS | Runtime identity source |
-|----|-------------------------|
-| macOS | `IOPlatformUUID` via `ioreg` |
-| Linux | `/etc/machine-id` or `/var/lib/dbus/machine-id` |
-| Windows | Registry `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` |
-
-Copying `config.toml` to another machine **does not** transfer a usable API key.
-
-### Binary & skill (install)
-
-| Path | Role |
-|------|------|
-| `~/.local/bin/agnes-aigc-gen` | Installed binary (`./install.sh`; must be on `PATH`) |
-| `~/.cursor/skills/agnes-aigc-gen/SKILL.md` | Cursor skill (optional; copied by `install.sh`) |
-
-Repo-local build: `target/release/agnes-aigc-gen` (via `cargo build --release`).
-
-### User input files (`-i` / `--input` / `--image`)
-
-| Input | Requirement |
-|-------|-------------|
-| Local path | Must **exist** and be readable (png, jpeg, webp, etc.) |
-| `https://…` URL | Network access; fetched at runtime |
-| `asset://<id>` | Id must exist in **`generations.db`** |
-| `base64:` / data URI | Inline payload; no file needed |
-
-For **video**, prefer `asset://` or HTTPS URL from a prior image run. Local paths trigger extra image-API staging (slower, more failure modes).
-
-### Local output files (`--save` only)
-
-Default: **no local files** — JSON `uri` is the remote URL.
-
-With `--save` (and optional `--output-dir`):
-
-| Setting | Resolved directory |
-|---------|------------------|
-| `config output-dir` default `.` | Current working directory when the command runs |
-| `~/path` | Expanded home directory |
-| `--output-dir PATH` | Overrides config for that command |
-
-Downloaded files are named `{YYYYMMDD-HHMMSS}-{sha256}.{ext}` (e.g. `.png`, `.mp4`) under the resolved output directory. Directory is created if missing.
-
-`config save-local` does **not** enable downloads; only `--save` on `image` / `video` does.
-
-### Network dependencies
-
-| Endpoint | When |
-|----------|------|
-| `{base_url}/images/generations` | Every image call |
-| `{base_url}/videos` + `GET /videos/{task_id}` | Video create + poll |
-| Remote URLs in `uri` / `assets.remote_url` | Default output; video frame inputs |
-
-Default `base_url`: `https://apihub.agnes-ai.com/v1`.
-
-### Agent file checklist
-
-Before calling the CLI, verify:
-
-1. **`agnes-aigc-gen` on PATH** (or use full path to binary)
-2. **`config.toml` exists** with `api_key_encrypted` (`config set api-key …`)
-3. **Input paths exist** when using local `-i` files
-4. **`asset://` ids** come from a prior successful generation on **this machine** (same `generations.db`)
-5. **Do not expect local output files** unless `--save` was passed
-6. **Video long-running** — do not delete or move `generations.db` mid-workflow if chaining via `asset://`
-7. **macOS agents** — use `~/Library/Application Support/agnes-aigc-gen/`, not `~/.config/…`
-
+## Global flags
 
 ```bash
-agnes-aigc-gen -v image ...    # debug logs on stderr
+agnes-aigc-gen -v image ...
 agnes-aigc-gen --verbose video ...
 ```
 
-Without `-v`, the CLI prints **only JSON/plain result on stdout** (no progress logs).
+Without `-v`, only JSON/plain result on stdout.
+
+## Runtime file dependencies
+
+Do **not** assume `~/.config` on macOS.
+
+### Config & state (`{config_dir}`)
+
+| OS | `{config_dir}` |
+|----|----------------|
+| macOS | `~/Library/Application Support/agnes-aigc-gen/` |
+| Linux | `~/.config/agnes-aigc-gen/` |
+| Windows | `%APPDATA%\agnes-aigc-gen\` |
+
+| File | Purpose |
+|------|---------|
+| `config.toml` | Settings + encrypted API key (must exist before API calls) |
+| `generations.db` | SQLite: `asset://` → remote URL, generation history |
+
+### Image inputs (`-i` / `--input`)
+
+| Form | Image i2i | Video `-i` |
+|------|-----------|------------|
+| Local path | ✓ | ✗ |
+| `https://…` | ✓ | ✓ |
+| `asset://<id>` | ✓ (→ remote URL) | ✓ (→ remote URL) |
+| base64 / data URI | ✓ | ✗ |
+
+**Video:** the API accepts **HTTP(S) image URLs only**. Do not pass local files or inline base64. Run `image` first, then chain with `asset://<id>` from JSON output (or use a public HTTPS URL).
+
+**Image i2i:** data URIs (`data:image/jpeg;base64,…`) and local files are supported; PNG/local bytes are converted to JPEG data URI before upload.
+
+### Outputs
+
+- Default: **no local files**; `uri` = remote URL
+- `--save`: writes `{timestamp}-{hash}.{ext}` under `output_dir` / `--output-dir`
+
+### Network
+
+| Endpoint | When |
+|----------|------|
+| `POST {base_url}/images/generations` | Image |
+| `POST {base_url}/videos` + poll `GET …/videos/{id}` | Video |
+
+Default `base_url`: `https://apihub.agnes-ai.com/v1`.
+
+### Before calling
+
+1. API key configured (`config show`)
+2. Image: local `-i` paths exist if used
+3. Video: every `-i` resolves to an HTTPS URL (`asset://` or direct URL)
+4. `asset://` ids from prior runs on **this** machine
+5. Video: allow minutes for poll; use `-v` to monitor
 
 ---
 
 ## Image generation
 
-### Basic usage
-
 ```bash
-# Text-to-image (default ratio 1:1)
 agnes-aigc-gen image -p "A cat on the beach" --ratio 16:9
-
-# Image-to-image / edit
-agnes-aigc-gen image -p "Make it cyberpunk" --ratio 9:16 \
-  -i ./photo.png -i https://example.com/ref.jpg
-
-# Comma-separated inputs
-agnes-aigc-gen image -p "Blend styles" --ratio 1:1 -i ./a.png,./b.jpg
+agnes-aigc-gen image -p "Make it cyberpunk" --ratio 9:16 -i ./photo.png
+agnes-aigc-gen image -p "portrait" --ratio 9:16 -n 4
+agnes-aigc-gen image -p "fixed look" --ratio 1:1 -s 42
 ```
 
-### Supported aspect ratios & output sizes
+### Ratios & sizes
 
-| Ratio | Size (image) |
-|-------|----------------|
+| Ratio | Size |
+|-------|------|
 | `1:1` | 1024×1024 |
 | `4:3` | 1152×864 |
 | `3:4` | 864×1152 |
 | `16:9` | 1280×720 |
 | `9:16` | 720×1280 |
 
-Any other ratio string **errors**. Do not invent ratios like `2:3` unless you verify support first.
+### Batch (`-n` / `--count` 2–4)
 
-### Input formats (`-i` / `--input`)
-
-| Form | Example |
-|------|---------|
-| Local path | `./photo.png` |
-| HTTP(S) URL | `https://example.com/a.jpg` |
-| Prior asset | `asset://c8d4eb63a84b` |
-| Base64 prefix | `base64:...` or raw base64 string |
-| Data URI | `data:image/jpeg;base64,...` |
-
-- Non-JPEG inputs are converted to `data:image/jpeg;base64,...` for the API
-- JPEG files/data URIs may be sent as-is
-
-### Batch generation (`-n`, image only)
-
-```bash
-agnes-aigc-gen image -p "portrait" --ratio 9:16 -n 4
-```
-
-| Constraint | Value |
-|------------|-------|
-| `-n` range | **1–4** (values outside range error) |
-| Execution | **Concurrent** API calls |
-| Partial failure | Allowed; failed items include `"success": false` and `"message"` |
-| Exit code | **0** if at least one success; **1** if all fail |
-
-**Single image (`-n 1` or omitted)** — stdout:
-
-```json
-{
-  "type": "image",
-  "ratio": "9:16",
-  "size": "720x1280",
-  "uri": "https://storage.googleapis.com/.../image.png",
-  "asset_uri": "asset://c8d4eb63a84b",
-  "generation_id": 1
-}
-```
-
-**Batch (`-n 2`–`4`)** — stdout:
+Concurrent API calls. **Do not combine with `-s` / `--seed`** — batch mode requires omitting seed (each call gets its own random seed).
 
 ```json
 {
   "results": [
-    {
-      "success": true,
-      "type": "image",
-      "ratio": "9:16",
-      "size": "720x1280",
-      "uri": "https://...",
-      "asset_uri": "asset://abc",
-      "generation_id": 2
-    },
-    {
-      "success": false,
-      "message": "image generation failed (429): ..."
-    }
+    { "success": true, "type": "image", "uri": "https://...", "asset_uri": "asset://abc" },
+    { "success": false, "message": "image generation failed (429): ..." }
   ]
 }
 ```
 
-Parse **`results`** array for batch; parse top-level object for single.
+Single image: top-level object (no `results` wrapper).
 
 ### Image flags
 
 | Flag | Default | Notes |
 |------|---------|-------|
 | `-p` / `--prompt` | required | |
-| `-r` / `--ratio` | `1:1` | Must be supported ratio |
-| `-n` / `--count` | `1` | Max **4**, image only |
-| `--seed` | random 0–999 | Must be **0–999** if set |
-| `-i` / `--input` | none | Repeatable |
-| `--save` | off | Download to `--output-dir` or config `output_dir` |
-| `--output-dir` | config | Used with `--save` |
-| `--output-format` | `json` | `plain` prints `uri` lines only |
-| `--retries` | config (3) | API/download retries |
+| `-r` / `--ratio` | `1:1` | Supported ratio |
+| `-n` / `--count` | `1` | Max 4; exclusive with `--seed` |
+| `-s` / `--seed` | random | 0–999; sent in `extra_body.seed` |
+| `-i` / `--input` | — | Repeatable; URL, path, data URI, `asset://` |
+| `--save` | off | Local download |
+| `--output-format` | `json` | or `plain` |
 
 ---
 
 ## Video generation
 
-### Basic usage
-
 ```bash
-# Text-to-video
-agnes-aigc-gen video -p "Ocean waves at sunset" --ratio 16:9 -d 5
-
-# Image-to-video (use asset from prior image gen)
-agnes-aigc-gen video -p "Gentle camera motion" --ratio 9:16 -d 3 \
+agnes-aigc-gen video -p "Ocean sunset" --ratio 16:9 -d 5
+agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
+  --negative-prompt "blurry, low quality, watermark" \
   -i asset://c8d4eb63a84b
-
-# Keyframes (exactly 2 images)
-agnes-aigc-gen video -p "Smooth transition" -d 5 \
-  -i ./start.jpg -i ./end.jpg
-
-# Resume / poll existing task
+agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
 agnes-aigc-gen video --task-id task_xxxxxxxx
 ```
 
-### Video input modes (`-i` / `--image`)
+### Input modes
 
-| # of images | Mode |
-|-------------|------|
-| 0 | Text-to-video (`--ratio` required) |
-| 1 | Image-to-video |
-| 2 | Keyframes |
-| 3+ | Multi-frame |
+| Images | API shape |
+|--------|-----------|
+| 0 | Text-to-video |
+| 1 | Image-to-video (`image` URL) |
+| 2+ | Multi-image (`extra_body.image` URLs; no `mode` set) |
 
-**All input frames must share the same aspect ratio.** When images are provided, output dimensions follow the **image ratio**, not necessarily `--ratio` (still pass matching `--ratio` for clarity).
+All frame URLs must share the same aspect ratio. CLI does **not** upload local files or call the image API to stage frames.
 
-### Video API input rules (avoid runtime errors)
+### Duration limits
 
-1. **Video endpoint accepts HTTP(S) URLs** for frame images — not raw base64 in the video API body
-2. **`asset://` IDs** are resolved to stored remote URLs automatically
-3. **Local files / base64** are staged: cropped to JPEG → uploaded via a one-off image API call → URL passed to video API
-4. Do **not** pass local paths to video if the staging image API might fail; prefer **`asset://` or HTTPS URL** from a prior successful image generation
+`max_duration = floor(441 / frame_rate)` — e.g. **18s @ 24fps**. `num_frames` snapped to **8n+1** (≤ 441).
 
-### Duration & frame rate limits
+### Polling
 
-Frame count sent to API follows **8n+1** snapping, max **441 frames**.
+| Elapsed | Interval |
+|---------|----------|
+| ≤ 2 min | 30s |
+| > 2 min | 15s |
 
-**Maximum requested duration (seconds):**
-
-```
-max_duration = floor(441 / frame_rate)
-```
-
-| frame_rate | max `-d` |
-|------------|----------|
-| 24 (default) | **18** |
-| 30 | **14** |
-| 25 | **17** |
-
-- `-d` must be **> 0** and **≤ max_duration** or CLI errors before API call
-- Example error: `duration 20s exceeds maximum 18s at 24 fps (max 441 frames)`
-- Actual encoded length may differ slightly after frame snapping; CLI validates **requested** duration only
-
-```bash
-agnes-aigc-gen video -p "..." --ratio 9:16 -d 3 --frame-rate 24   # OK
-agnes-aigc-gen video -p "..." --ratio 9:16 -d 20 --frame-rate 24  # ERROR
-```
-
-### Supported video sizes (720p tier)
-
-| Ratio | Size (video) |
-|-------|----------------|
-| `1:1` | 768×768 |
-| `4:3` | 960×768 |
-| `3:4` | 768×960 |
-| `16:9` | 1280×768 |
-| `9:16` | 768×1280 |
-
-### Polling behavior
-
-After `POST /videos`, CLI polls `GET /videos/{task_id}` until `completed` or `failed`:
-
-| Elapsed since start | Poll interval |
-|---------------------|---------------|
-| First 2 minutes | **30s** |
-| After 2 minutes | **15s** |
-
-Video jobs often stay `queued` for several minutes — **wait for the command to finish**; do not assume failure while exit code is pending.
-
-Use `-v` to see poll status on stderr.
-
-### Video output (success)
-
-```json
-{
-  "type": "video",
-  "ratio": "9:16",
-  "size": "768x1280",
-  "uri": "https://storage.googleapis.com/.../video.mp4",
-  "asset_uri": "asset://eb796809aa05",
-  "generation_id": 2
-}
-```
-
-- Default `uri` = remote MP4 URL
-- Add `--save` to download locally; then `uri` = local file path
+Wait for command to finish; queued tasks are normal.
 
 ### Video flags
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `-p` / `--prompt` | required* | *Optional only with `--task-id` |
-| `-r` / `--ratio` | `16:9` | Used for text-to-video; should match input image ratio for i2v |
-| `-d` / `--duration` | `5` | Must respect max duration table |
-| `--frame-rate` | `24` | Must be > 0 |
-| `-i` / `--image` | none | Repeatable; **not** `--input` |
-| `--task-id` | none | Poll existing task |
-| `--save` | off | Download MP4 locally |
-| `--output-dir` | config | Used with `--save` |
-| `--output-format` | `json` | `plain` → uri only |
-| `--retries` | config (3) | HTTP retry for API calls |
+| `-p` / `--prompt` | required* | *Optional with `--task-id` |
+| `--np` / `--negative-prompt` | — | Top-level API field |
+| `-s` / `--seed` | omit | 0–999; top-level; only sent when set |
+| `-r` / `--ratio` | `16:9` | Used for t2v sizing |
+| `-d` / `--duration` | `5` | ≤ max duration |
+| `-f` / `--frame-rate` | `24` | **1–60** |
+| `-i` / `--image` | — | HTTPS URL or `asset://` only |
+| `--save` | off | |
 
 ---
 
-## Recommended agent workflow (image → video)
+## Workflow: image → video
 
 ```bash
-# Step 1: generate image
-agnes-aigc-gen image -p "Portrait of a woman, soft light" --ratio 9:16
+agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
+# → parse asset_uri from JSON
 
-# Step 2: parse JSON → asset_uri (e.g. asset://c8d4eb63a84b)
-
-# Step 3: image-to-video (match ratio, duration within cap)
-agnes-aigc-gen -v video -p "Subtle motion, cinematic" \
-  --ratio 9:16 -d 3 -i asset://c8d4eb63a84b
+agnes-aigc-gen -v video -p "Subtle motion" --ratio 9:16 -d 3 -i asset://<id>
 ```
 
-**Always:**
-
-1. Use the **`asset_uri`** from step 1 for step 3 (not the local path from `--save`)
-2. Match **`--ratio`** between image and video
-3. Keep **`-d` ≤ 18`** at default 24 fps
-4. Allow **several minutes** for video completion
+Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Match ratio. `-d` ≤ 18 @ 24fps.
 
 ---
 
@@ -397,38 +233,9 @@ agnes-aigc-gen -v video -p "Subtle motion, cinematic" \
 
 ```bash
 agnes-aigc-gen asset list
-agnes-aigc-gen asset show c8d4eb63a84b
 agnes-aigc-gen asset show asset://c8d4eb63a84b
-
 agnes-aigc-gen history list
-agnes-aigc-gen history show 1
 ```
-
-Use when `asset://` lookup fails or to inspect stored remote URLs.
-
----
-
-## Configuration
-
-```bash
-agnes-aigc-gen config set base-url https://apihub.agnes-ai.com/v1
-agnes-aigc-gen config set image-model agnes-image-2.1-flash
-agnes-aigc-gen config set video-model agnes-video-v2.0
-agnes-aigc-gen config set text-model agnes-2.0-flash
-agnes-aigc-gen config set output-dir .
-agnes-aigc-gen config set max-retries 3
-agnes-aigc-gen config show
-```
-
-| Key | Default |
-|-----|---------|
-| `base-url` | `https://apihub.agnes-ai.com/v1` |
-| `image-model` | `agnes-image-2.1-flash` |
-| `video-model` | `agnes-video-v2.0` |
-| `output-dir` | `.` |
-| `max-retries` | `3` |
-
-`config set save-local` does **not** change image/video CLI download behavior; use `--save` on each command.
 
 ---
 
@@ -437,50 +244,34 @@ agnes-aigc-gen config show
 | Type | Model | Endpoint |
 |------|-------|----------|
 | Image | `agnes-image-2.1-flash` | `POST /v1/images/generations` |
-| Video | `agnes-video-v2.0` | `POST /v1/videos` + poll `GET /v1/videos/{id}` |
-| Text (future) | `agnes-2.0-flash` | `POST /v1/chat/completions` |
+| Video | `agnes-video-v2.0` | `POST /v1/videos` + poll |
 
 ---
 
-## Common errors & fixes
+## Common errors (runtime)
 
-| Error / symptom | Cause | Fix |
-|-----------------|-------|-----|
-| `API key not configured` | Missing key | `config set api-key ...` |
-| Machine ID / decrypt error | New machine or copied config | Re-set API key on this machine (`config set api-key …`) |
-| `invalid ratio` / unsupported image ratio | Bad `--ratio` | Use one of five supported ratios |
-| `count must be 1–4` | `-n` on image | Use 1–4 only; no `-n` on video |
-| `seed must be 0–999` | Bad `--seed` | Clamp or omit |
-| `duration ... exceeds maximum` | `-d` too long | `floor(441/fps)`; e.g. max 18s @ 24fps |
-| `--prompt is required` | Video without prompt | Add `-p` unless `--task-id` |
-| `asset not found: asset://...` | Missing DB row or wrong machine | Regenerate image; check `{config_dir}/generations.db` via `asset list` |
-| Video `cannot identify image file` | Base64/local sent directly to video API | Use `asset://` or HTTPS URL from prior image |
-| Input frames ratio mismatch | Mixed aspect ratios | Same ratio on all `-i` images |
-| Batch all failed | API/rate limit | Check `message` in failed `results[]` items |
-| Empty output / hung command | Video still queued | Wait; use `-v` to monitor; poll with `--task-id` if needed |
-| Expected local file but got URL | Default is remote | Add `--save` to download |
+| Error | Fix |
+|-------|-----|
+| `API key not configured` | SETUP.md → `config set api-key` |
+| Decrypt failed | Re-set API key on this machine |
+| `invalid ratio` | Use supported ratio |
+| `count must be 1–4` | Image `-n` only |
+| `--seed ... cannot be used with --count` | Drop `--seed` for batch, or use `-n 1` |
+| `frame_rate must be 1–60` | Fix `-f` / `--frame-rate` |
+| `duration ... exceeds maximum` | Reduce `-d` |
+| `--prompt is required` | Add `-p` |
+| `asset not found` | Regenerate image; `asset list` |
+| Video: `unsupported input` / local path | Use `asset://` or HTTPS URL only |
+| Hung video | Wait; `-v` or `--task-id` |
 
 ---
 
-## Deprecated / invalid flags (do not use)
+## Invalid flags (do not use)
 
-These will **not** work or are removed:
-
-- `--size` on image or video
-- `--no-save` (use default remote URL, or `--save` to download)
-- `--first-frame`, `--keyframes` on video (use `-i` / `--image` instead)
-- `--input` on video (image command only)
-- `-n` on video
-- `remote_url` field in JSON output (use `uri` only)
-- Relying on `config save-local true` for automatic download
+`--size`, `--no-save`, `--first-frame`, `--keyframes`, `--input` on video, `-n` on video, `remote_url` in output, `config save-local` for downloads, `num_inference_steps`.
 
 ---
 
 ## Other commands
 
-```bash
-agnes-aigc-gen dashboard   # ratatui UI
-agnes-aigc-gen chat        # not implemented yet
-```
-
-For agent automation, prefer **`image`** and **`video`** subcommands with JSON stdout parsing.
+`dashboard` (ratatui), `chat` (not implemented). Prefer `image` / `video` with JSON stdout for agents.

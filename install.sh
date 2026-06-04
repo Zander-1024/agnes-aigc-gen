@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
+# Install from local source (requires Rust toolchain).
+# For prebuilt binaries, use install-remote.sh instead.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="agnes-aigc-gen"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$HOME/.local/bin}"
-INSTALL_SKILL_DIR="${INSTALL_SKILL_DIR:-$HOME/.cursor/skills}"
 SKILL_SRC="$ROOT/skills/agnes-aigc-gen"
-SKILL_DEST="$INSTALL_SKILL_DIR/agnes-aigc-gen"
+
+# shellcheck source=scripts/install-skill.sh
+source "$ROOT/scripts/install-skill.sh"
 
 echo "==> Building release binary..."
 cd "$ROOT"
@@ -29,20 +32,15 @@ if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
   echo ""
 fi
 
-if [[ -d "$SKILL_SRC" && -f "$SKILL_SRC/SKILL.md" ]]; then
-  echo "==> Installing Cursor skill to $SKILL_DEST"
-  mkdir -p "$INSTALL_SKILL_DIR"
-  rm -rf "$SKILL_DEST"
-  cp -R "$SKILL_SRC" "$SKILL_DEST"
-  echo "Skill installed. Cursor loads skills from ~/.cursor/skills/<name>/SKILL.md"
-else
-  echo "warning: skill source not found at $SKILL_SRC; skipping skill install" >&2
+if [[ "${SKIP_SKILL:-0}" != "1" ]]; then
+  skill_install_from_local "$SKILL_SRC"
+  echo ""
+  skill_install_summary
 fi
 
 echo ""
 echo "Done."
 echo "  Binary: $INSTALL_BIN_DIR/$BIN_NAME"
-echo "  Skill:  $SKILL_DEST/SKILL.md"
 echo ""
 echo "Next steps:"
 echo "  $BIN_NAME config set api-key YOUR_API_KEY"

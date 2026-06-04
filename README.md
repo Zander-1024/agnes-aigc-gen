@@ -5,120 +5,188 @@ CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) image and video 
 ## Features
 
 - **Image generation** — text-to-image and image-to-image (`agnes-image-2.1-flash`)
-- **Video generation** — text-to-video, first-frame, keyframes, multi-frame (`agnes-video-v2.0`)
-- **Aspect ratios** — pass `--ratio` only; dimensions computed internally
-- **Structured output** — JSON with `ratio`, `size`, `uri`, `remote_url`; default local download
-- **Encrypted config** — API key stored machine-bound in `~/.config/agnes-aigc-gen/`
+- **Video generation** — text-to-video, image-to-video, multi-image (`agnes-video-v2.0`, async poll)
+- **Aspect ratios** — pass `--ratio` only; dimensions computed internally (never `--size`)
+- **Batch images** — `-n` / `--count` 1–4 concurrent calls with partial-failure JSON
+- **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
+- **Asset history** — SQLite `asset://` references for image → video workflows
+- **Encrypted config** — API key encrypted, machine-bound (see config dir in [SETUP.md](skills/agnes-aigc-gen/SETUP.md))
 - **Dashboard** — `agnes-aigc-gen dashboard` (ratatui terminal UI)
 - **Agent skill** — Cursor skill under `skills/agnes-aigc-gen/`
 
 ## Requirements
 
-- Rust 1.85+ (edition 2024)
 - Agnes API key from [platform.agnes-ai.com](https://platform.agnes-ai.com)
+- **Release install:** curl/PowerShell (no Rust required)
+- **Source install:** Rust 1.85+ (edition 2024)
 
 ## Install
 
-### Quick install (recommended)
+### Release install (recommended)
 
-From the repository root:
+Downloads the latest binary from [GitHub Releases](https://github.com/Zander-1024/agnes-aigc-gen/releases).
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-remote.ps1 | iex
+```
+
+**Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
+
+Pin version: `AGNES_AIGC_VERSION=0.1.0` before the curl/irm command.
+
+### Source install (developers)
+
+From a git clone:
 
 ```bash
 ./install.sh
 ```
 
-This will:
+Builds with `cargo build --release`, installs to `~/.local/bin`, and installs the skill to `~/.agents/skills/agnes-aigc-gen/` by default.
 
-1. Build a release binary with `cargo build --release`
-2. Install the binary to **`~/.local/bin/agnes-aigc-gen`**
-3. Install the Cursor skill to **`~/.cursor/skills/agnes-aigc-gen/`**
+Optional agent-specific installs:
 
-Ensure `~/.local/bin` is on your `PATH`. Add to `~/.zshrc` or `~/.bashrc` if needed:
+```bash
+INSTALL_AGENTS=cursor,claude,codex,openclaw,hermes ./install.sh
+INSTALL_AGENTS=all ./install-remote.sh
+```
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### Manual install
+### Release tags (maintainers)
+
+Bump `version` in `Cargo.toml`, then:
 
 ```bash
-cargo build --release
-mkdir -p ~/.local/bin
-cp target/release/agnes-aigc-gen ~/.local/bin/
-chmod +x ~/.local/bin/agnes-aigc-gen
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-### Install the Cursor skill
-
-**Option A — user-wide (recommended for agents across projects):**
-
-```bash
-mkdir -p ~/.cursor/skills
-cp -R skills/agnes-aigc-gen ~/.cursor/skills/
-```
-
-**Option B — project-only (this repo):**
-
-```bash
-mkdir -p .cursor/skills
-cp -R skills/agnes-aigc-gen .cursor/skills/
-```
-
-The skill lives at `skills/agnes-aigc-gen/SKILL.md` in this repository. Cursor discovers skills from `~/.cursor/skills/<name>/SKILL.md` or `.cursor/skills/<name>/SKILL.md`.
+Tag `v*` triggers multi-platform builds via `.github/workflows/release.yml`.
 
 ## Configure
 
 ```bash
 agnes-aigc-gen config set api-key YOUR_API_KEY
-agnes-aigc-gen config set output-dir .    # optional; default is current directory
 agnes-aigc-gen config show
 ```
+
+API key is encrypted in `{config_dir}/config.toml`. Full setup: [skills/agnes-aigc-gen/SETUP.md](skills/agnes-aigc-gen/SETUP.md). Command reference: [SKILL.md](skills/agnes-aigc-gen/SKILL.md).
 
 **Defaults**
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `base_url` | `https://apihub.agnes-ai.com/v1` | Official Agnes API gateway (OpenAI-compatible) |
-| `output_dir` | `.` | Downloads go to the **current working directory** |
+| `base_url` | `https://apihub.agnes-ai.com/v1` | Official Agnes API gateway |
+| `output_dir` | `.` | Used with `--save` only |
 
 ## Usage
 
+Every option has a long form (`--prompt`, `--ratio`, …). Short forms (`-p`, `-r`, …) are optional shortcuts — see [SKILL.md](skills/agnes-aigc-gen/SKILL.md) for the full table.
+
 ```bash
-# Image
+# Image (text-to-image)
 agnes-aigc-gen image -p "A cat on the beach" --ratio 16:9
 
-# Image-to-image (multiple inputs)
-agnes-aigc-gen image -p "Cyberpunk style" --ratio 1:1 --input a.png,b.jpg
+# Image-to-image — local path, URL, asset://, base64, or data URI
+agnes-aigc-gen image -p "Cyberpunk style" --ratio 1:1 -i a.png,b.jpg
 
-# Video
-agnes-aigc-gen video -p "Cinematic walk" --ratio 16:9 --duration 5
+# Batch (2–4 concurrent); do not combine with --seed
+agnes-aigc-gen image -p "portrait variants" --ratio 9:16 -n 4
+
+# Video (text-to-video)
+agnes-aigc-gen video -p "Cinematic walk" --ratio 16:9 -d 5
+
+# Image → video: generate first, then pass asset:// (HTTPS URL only for -i)
+agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
+agnes-aigc-gen video -p "Subtle motion" -d 3 \
+  --negative-prompt "blurry, watermark" \
+  -i asset://<id-from-json>
+
+# Verbose polling logs
+agnes-aigc-gen -v video -p "Ocean waves" --ratio 16:9 -d 5
 
 # Dashboard
 agnes-aigc-gen dashboard
 ```
 
-See `agnes-aigc-gen --help` and [skills/agnes-aigc-gen/SKILL.md](skills/agnes-aigc-gen/SKILL.md) for full reference.
+### Image vs video inputs
+
+| Input | Image `-i` / `--input` | Video `-i` / `--image` |
+|-------|------------------------|-------------------------|
+| Local path | ✓ | ✗ |
+| HTTPS URL | ✓ | ✓ |
+| `asset://` | ✓ | ✓ |
+| base64 / data URI | ✓ | ✗ |
+
+Video does not upload local files or call the image API to stage frames. Generate an image first and chain with `asset_uri` from JSON output.
+
+### Key limits
+
+| Topic | Rule |
+|-------|------|
+| Ratios | `1:1`, `4:3`, `3:4`, `16:9`, `9:16` |
+| Image seed | `-s` / `--seed`, 0–999; mutually exclusive with `-n > 1` |
+| Video seed | `-s` / `--seed`, 0–999; only sent when set |
+| Video duration | max `floor(441 / frame_rate)` seconds (18s @ 24 fps) |
+| Video frame rate | `-f` / `--frame-rate`, 1–60 (default 24) |
+| Negative prompt | `--np` / `--negative-prompt` on video (top-level API field) |
+
+See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](skills/agnes-aigc-gen/SETUP.md) (install & config).
+
+## API reference docs
+
+Local copies of the Agnes official docs (Chinese, for reference):
+
+| Doc | Model |
+|-----|-------|
+| [docs/agnes-image-2.1-flash.md](docs/agnes-image-2.1-flash.md) | Image |
+| [docs/agnes-video-v2.0.md](docs/agnes-video-v2.0.md) | Video |
+| [docs/agnes-2.0-flash.md](docs/agnes-2.0-flash.md) | Text (chat) |
+
+Source: [agnes-ai.com/doc](https://agnes-ai.com/doc)
 
 ## Output
 
-Default JSON (auto-download enabled):
+Default JSON (`uri` is remote URL):
 
 ```json
 {
   "type": "image",
   "ratio": "16:9",
-  "size": "1366x768",
-  "uri": "/Users/you/projects/20260603-143022-abc.png",
-  "remote_url": "https://..."
+  "size": "1280x720",
+  "uri": "https://storage.googleapis.com/.../image.png",
+  "asset_uri": "asset://abc123"
+}
+```
+
+Batch image (`-n 2–4`):
+
+```json
+{
+  "results": [
+    { "success": true, "type": "image", "uri": "https://...", "asset_uri": "asset://abc" },
+    { "success": false, "message": "..." }
+  ]
 }
 ```
 
 | Flag | Effect |
 |------|--------|
-| `--output-dir` | Override save directory |
-| `--no-save` | Return remote URL only |
+| `--save` | Download to `output_dir` |
 | `--output-format plain` | Print `uri` only |
-| `--retries` | API/download retry count |
+| `--retries` | API retry count |
+| `-v` / `--verbose` | Debug logs on stderr |
 
 ## Development
 
@@ -131,11 +199,16 @@ cargo run -- config show
 ## Project layout
 
 ```
-skills/agnes-aigc-gen/   # Cursor agent skill (English)
+docs/                    # Agnes API reference (image, video, text)
+scripts/                 # install-skill.sh / install-skill.ps1
+skills/agnes-aigc-gen/   # SKILL.md (usage) + SETUP.md (install & config)
 src/cli/                 # image, video, config, dashboard, chat
 src/ui/                  # ratatui dashboard
 src/api/                 # Agnes HTTP client
-install.sh               # build + install binary and skill
+install.sh               # source: cargo build + install
+install-remote.sh        # release: download from GitHub Releases (Unix)
+install-remote.ps1       # release: download from GitHub Releases (Windows)
+install-remote.bat       # Windows wrapper for install-remote.ps1
 ```
 
 ## License

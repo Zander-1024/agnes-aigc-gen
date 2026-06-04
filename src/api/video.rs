@@ -7,14 +7,12 @@ use reqwest::StatusCode;
 use serde_json::json;
 
 use crate::api::ApiClient;
-use crate::api::types::{
-    ExtraBodyImage, ExtraBodyVideo, ImageGenerationRequest, ImageGenerationResponse, VideoCreateRequest,
-    VideoTaskResponse,
-};
+use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoTaskResponse};
+use crate::api::image::resolve_image_seed;
 use crate::logging;
 use crate::media::input::ImageInput;
 use crate::media::input::{ensure_same_ratio, image_dimensions_from_bytes, load_image_bytes};
-use crate::media::{classify_input, parse_image_inputs, prepare_video_frames};
+use crate::media::{classify_input, parse_image_inputs};
 use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url, retry};
 use crate::ratio::{AspectRatio, resolve_video_timing, video_dimensions};
 
@@ -24,6 +22,8 @@ const POLL_INTERVAL_LATE: Duration = Duration::from_secs(15);
 
 pub struct VideoRequest {
     pub prompt: String,
+    pub negative_prompt: Option<String>,
+    pub seed: Option<u32>,
     pub ratio: AspectRatio,
     pub duration: f64,
     pub frame_rate: u32,
@@ -42,6 +42,10 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     }
 
     let (num_frames, actual_duration) = resolve_video_timing(req.duration, req.frame_rate)?;
+    let seed = match req.seed {
+        Some(s) => Some(resolve_image_seed(Some(s))?),
+        None => None,
+    };
 
     let inputs_raw = parse_image_inputs(&req.images)?;
 
@@ -50,10 +54,10 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         .map(|s| api.db.resolve_reference(s))
         .collect::<Result<_>>()?;
 
-    let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
-
     let input_record = json!({
         "prompt": req.prompt,
+        "negative_prompt": req.negative_prompt,
+        "seed": seed,
         "ratio": req.ratio.label(),
         "duration": req.duration,
         "actual_duration": actual_duration,
@@ -64,22 +68,15 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         "model": api.config.video_model,
     });
 
-    let (dims, frame_urls) = if classified.is_empty() {
+    let (dims, frame_urls) = if resolved.is_empty() {
         (video_dimensions(&req.ratio), Vec::new())
-    } else if classified.iter().all(|i| matches!(i, ImageInput::Url(_))) {
-        let (dims, _, urls) = video_frame_urls(&classified, &api.client)?;
-        (dims, urls)
     } else {
-        let (frames, _, dims) = prepare_video_frames(&classified, &api.client)?;
-        let mut urls = Vec::with_capacity(frames.len());
-        for frame in frames {
-            urls.push(stage_frame_as_url(api, &frame.payload, &dims)?);
-        }
+        let (dims, urls) = video_frame_urls(&resolved, &api.client)?;
         (dims, urls)
     };
 
     log::debug!(
-        "video create size={}x{} frames={num_frames} duration={actual_duration:.3}s frame_rate={} input_frames={}",
+        "video create size={}x{} frames={num_frames} duration={actual_duration:.3}s frame_rate={} seed={seed:?} input_frames={}",
         dims.width,
         dims.height,
         req.frame_rate,
@@ -88,7 +85,6 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     match frame_urls.len() {
         0 => log::debug!("video mode: text-to-video"),
         1 => log::debug!("video mode: image-to-video"),
-        2 => log::debug!("video mode: keyframes"),
         n => log::debug!("video mode: multi-frame ({n} images)"),
     }
 
@@ -100,19 +96,12 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         width: Some(dims.width),
         num_frames: Some(num_frames),
         frame_rate: Some(req.frame_rate),
+        negative_prompt: req.negative_prompt.clone(),
+        seed,
         extra_body: None,
     };
 
-    match frame_urls.len() {
-        0 => {}
-        1 => body.image = Some(frame_urls[0].clone()),
-        2 => {
-            body.extra_body = Some(ExtraBodyVideo { image: Some(frame_urls), mode: Some("keyframes".into()) });
-        }
-        _ => {
-            body.extra_body = Some(ExtraBodyVideo { image: Some(frame_urls), mode: None });
-        }
-    }
+    apply_video_frames(&mut body, frame_urls);
 
     let resp = api.post_json("videos", &body)?;
     if !resp.status().is_success() {
@@ -197,14 +186,16 @@ fn poll_and_finalize(
             .iter()
             .map(|s| api.db.resolve_reference(s))
             .collect::<Result<_>>()?;
+        let (dims, _) = video_frame_urls(&resolved, &api.client)?;
         let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
-        if classified.iter().all(|i| matches!(i, ImageInput::Url(_))) {
-            let (dims, ratio, _) = video_frame_urls(&classified, &api.client)?;
-            (dims, ratio.label())
-        } else {
-            let (_, ratio, dims) = prepare_video_frames(&classified, &api.client)?;
-            (dims, ratio.label())
+        let mut dim_list = Vec::new();
+        for input in &classified {
+            let bytes = load_image_bytes(input, &api.client)?;
+            dim_list.push(image_dimensions_from_bytes(&bytes)?);
         }
+        ensure_same_ratio(&dim_list)?;
+        let ratio = AspectRatio::from_dimensions(dim_list[0].0, dim_list[0].1);
+        (dims, ratio.label())
     } else {
         (video_dimensions(&req.ratio), req.ratio.label())
     };
@@ -258,53 +249,38 @@ fn poll_and_finalize(
     Ok(result)
 }
 
-fn video_frame_urls(
-    inputs: &[ImageInput],
-    client: &reqwest::blocking::Client,
-) -> Result<(crate::ratio::Dimensions, AspectRatio, Vec<String>)> {
-    let urls: Vec<String> = inputs
+fn apply_video_frames(body: &mut VideoCreateRequest, frame_urls: Vec<String>) {
+    match frame_urls.len() {
+        0 => {}
+        1 => body.image = Some(frame_urls[0].clone()),
+        _ => body.extra_body = Some(ExtraBodyVideo { image: Some(frame_urls) }),
+    }
+}
+
+fn video_frame_urls(resolved: &[String], client: &reqwest::blocking::Client) -> Result<(crate::ratio::Dimensions, Vec<String>)> {
+    let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
+    let urls: Vec<String> = classified
         .iter()
-        .map(|i| match i {
+        .zip(resolved)
+        .map(|(input, raw)| match input {
             ImageInput::Url(u) => Ok(u.clone()),
-            _ => bail!("expected URL frame inputs"),
+            _ => bail!(
+                "video -i/--image requires HTTPS URL or asset:// (remote URL); \
+                 unsupported input {raw:?}. Generate an image first and pass asset:// or a public URL. \
+                 Local paths, base64, and data URIs are not supported for video"
+            ),
         })
         .collect::<Result<_>>()?;
 
     let mut dims = Vec::new();
-    for input in inputs {
+    for input in &classified {
         let bytes = load_image_bytes(input, client)?;
         dims.push(image_dimensions_from_bytes(&bytes)?);
     }
     ensure_same_ratio(&dims)?;
     let ratio = AspectRatio::from_dimensions(dims[0].0, dims[0].1);
     let target = video_dimensions(&ratio);
-    Ok((target, ratio, urls))
-}
-
-fn stage_frame_as_url(api: &ApiClient, data_uri: &str, dims: &crate::ratio::Dimensions) -> Result<String> {
-    log::debug!("staging local frame via image API (data:image/jpeg;base64,...)");
-    let body = ImageGenerationRequest {
-        model: api.config.image_model.clone(),
-        prompt: "Reproduce the input image exactly with no changes.".into(),
-        size: dims.size_string(),
-        extra_body: Some(ExtraBodyImage {
-            image: Some(vec![data_uri.to_string()]),
-            response_format: Some("url".into()),
-            seed: None,
-        }),
-    };
-    let resp = api.post_json("images/generations", &body)?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        logging::log_response(status.as_u16(), &text);
-        bail!("staging frame for video failed ({status}): {text}");
-    }
-    let parsed: ImageGenerationResponse = resp.json().context("parse staging response")?;
-    let item = parsed.data.first().context("empty staging response")?;
-    let url = item.url.clone().context("staging response missing url")?;
-    log::debug!("staged frame url: {url}");
-    Ok(url)
+    Ok((target, urls))
 }
 
 #[cfg(test)]
@@ -317,5 +293,28 @@ mod tests {
         assert_eq!(poll_interval(Duration::from_secs(119)), POLL_INTERVAL_EARLY);
         assert_eq!(poll_interval(Duration::from_secs(120)), POLL_INTERVAL_LATE);
         assert_eq!(poll_interval(Duration::from_secs(300)), POLL_INTERVAL_LATE);
+    }
+
+    #[test]
+    fn apply_video_frames_no_mode() {
+        let mut body = VideoCreateRequest {
+            model: "agnes-video-v2.0".into(),
+            prompt: "test".into(),
+            image: None,
+            height: None,
+            width: None,
+            num_frames: None,
+            frame_rate: None,
+            negative_prompt: None,
+            seed: None,
+            extra_body: None,
+        };
+        apply_video_frames(
+            &mut body,
+            vec!["https://a/1.png".into(), "https://a/2.png".into()],
+        );
+        assert!(body.image.is_none());
+        let extra = body.extra_body.as_ref().unwrap();
+        assert_eq!(extra.image.as_ref().unwrap().len(), 2);
     }
 }

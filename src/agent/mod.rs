@@ -36,6 +36,8 @@ impl TaskRouter for LocalTaskRouter {
             &api,
             crate::api::VideoRequest {
                 prompt: prompt.to_string(),
+                negative_prompt: None,
+                seed: None,
                 ratio: crate::ratio::AspectRatio::parse(ratio)?,
                 duration,
                 frame_rate: 24,

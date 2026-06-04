@@ -5,27 +5,35 @@ use log;
 use crate::api::{ApiClient, VideoRequest, generate_video};
 use crate::config::AppConfig;
 use crate::output::OutputFormat;
-use crate::ratio::{AspectRatio, max_video_duration, resolve_video_timing};
+use crate::ratio::{AspectRatio, max_video_duration, resolve_video_timing, validate_frame_rate};
 
 #[derive(Args)]
 pub struct VideoArgs {
     /// Text prompt describing the video
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "prompt")]
     pub prompt: Option<String>,
 
+    /// Negative prompt (undesired content)
+    #[arg(long = "negative-prompt", visible_alias = "np")]
+    pub negative_prompt: Option<String>,
+
+    /// Fixed seed for reproducible generation (0–999). Omitted = not sent to API.
+    #[arg(short = 's', long = "seed")]
+    pub seed: Option<u32>,
+
     /// Aspect ratio when no input images (e.g. 16:9)
-    #[arg(short = 'r', long, default_value = "16:9")]
+    #[arg(short = 'r', long = "ratio", default_value = "16:9")]
     pub ratio: String,
 
     /// Target duration in seconds (max depends on frame rate; 18s at 24 fps)
-    #[arg(short = 'd', long, default_value_t = 5.0)]
+    #[arg(short = 'd', long = "duration", default_value_t = 5.0)]
     pub duration: f64,
 
-    /// Frame rate (default 24). Max duration = floor(441 / fps) seconds.
-    #[arg(long = "frame-rate", default_value_t = 24)]
+    /// Frame rate (1–60, default 24). Max duration = floor(441 / fps) seconds.
+    #[arg(short = 'f', long = "frame-rate", default_value_t = 24)]
     pub frame_rate: u32,
 
-    /// Input image(s): local path, URL, asset://, or base64 (repeatable or comma-separated)
+    /// Input image URL(s): HTTPS URL or asset:// only (repeatable or comma-separated)
     #[arg(short = 'i', long = "image")]
     pub images: Vec<String>,
 
@@ -48,6 +56,8 @@ pub struct VideoArgs {
 }
 
 pub fn run(args: VideoArgs) -> Result<()> {
+    validate_frame_rate(args.frame_rate)?;
+
     let cfg = AppConfig::load()?;
     let ratio = AspectRatio::parse(&args.ratio)?;
     let output_format = match args.output_format.to_lowercase().as_str() {
@@ -78,6 +88,8 @@ pub fn run(args: VideoArgs) -> Result<()> {
         &api,
         VideoRequest {
             prompt,
+            negative_prompt: args.negative_prompt,
+            seed: args.seed,
             ratio,
             duration: args.duration,
             frame_rate: args.frame_rate,

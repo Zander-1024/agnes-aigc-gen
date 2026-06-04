@@ -149,14 +149,22 @@ pub fn duration_from_frames(num_frames: u32, frame_rate: u32) -> f64 {
     num_frames as f64 / frame_rate as f64
 }
 
+pub fn validate_frame_rate(frame_rate: u32) -> Result<()> {
+    anyhow::ensure!(
+        (1..=60).contains(&frame_rate),
+        "frame_rate must be 1–60, got {frame_rate}"
+    );
+    Ok(())
+}
+
 pub fn max_video_duration(frame_rate: u32) -> Result<u32> {
-    anyhow::ensure!(frame_rate > 0, "frame_rate must be positive");
+    validate_frame_rate(frame_rate)?;
     Ok(MAX_VIDEO_FRAMES / frame_rate)
 }
 
 /// Validate requested duration and return snapped frame count + actual duration.
 pub fn resolve_video_timing(duration_secs: f64, frame_rate: u32) -> Result<(u32, f64)> {
-    anyhow::ensure!(frame_rate > 0, "frame_rate must be positive");
+    validate_frame_rate(frame_rate)?;
     anyhow::ensure!(duration_secs > 0.0, "duration must be positive");
     let max_dur = max_video_duration(frame_rate)?;
     anyhow::ensure!(
@@ -210,5 +218,13 @@ mod tests {
         assert_eq!(max_video_duration(24).unwrap(), 18);
         assert!(resolve_video_timing(18.0, 24).is_ok());
         assert!(resolve_video_timing(18.1, 24).is_err());
+    }
+
+    #[test]
+    fn frame_rate_range() {
+        assert!(validate_frame_rate(1).is_ok());
+        assert!(validate_frame_rate(60).is_ok());
+        assert!(validate_frame_rate(0).is_err());
+        assert!(validate_frame_rate(61).is_err());
     }
 }

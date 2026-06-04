@@ -40,7 +40,7 @@ irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/main/install-re
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
 
-Pin version: `AGNES_AIGC_VERSION=0.1.0` before the curl/irm command.
+Pin version: `AGNES_AIGC_VERSION=0.2.0` before the curl/irm command.
 
 ### Source install (developers)
 
@@ -68,8 +68,8 @@ export PATH="$HOME/.local/bin:$PATH"
 Bump `version` in `Cargo.toml`, then:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Tag `v*` triggers multi-platform builds via `.github/workflows/release.yml`.
@@ -118,10 +118,10 @@ agnes-aigc-gen -v video -p "Ocean waves" --ratio 16:9 -d 5
 
 # Async video: submit and return task_id immediately
 agnes-aigc-gen video -p "Ocean waves" --ratio 16:9 -d 5 --async
-agnes-aigc-gen task list              # recent tasks (default 10)
+agnes-aigc-gen task list              # recent tasks (default 10); refreshes in-progress
 agnes-aigc-gen task list -n 20
-agnes-aigc-gen task show task_xxxxxxxx  # refresh status from API
-agnes-aigc-gen task wait task_xxxxxxxx  # block until complete
+agnes-aigc-gen task show 3              # by local id (or full vendor task_id)
+agnes-aigc-gen task wait 3              # block until complete
 
 # Dashboard
 agnes-aigc-gen dashboard
@@ -148,7 +148,7 @@ Video does not upload local files or call the image API to stage frames. Generat
 | Video duration | max `floor(441 / frame_rate)` seconds (18s @ 24 fps) |
 | Video frame rate | `-f` / `--frame-rate`, 1–60 (default 24) |
 | Negative prompt | `--np` / `--negative-prompt` on video (top-level API field) |
-| Video async | `--async` submits task and returns; use `task list` / `task show` / `task wait` |
+| Video async | `--async` submits task and returns local `id` + vendor `task_id`; use `task list` / `task show 3` |
 
 See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](skills/agnes-aigc-gen/SETUP.md) (install & config).
 

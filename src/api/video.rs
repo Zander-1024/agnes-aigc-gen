@@ -42,6 +42,8 @@ pub struct VideoRequest {
 
 #[derive(Debug, Serialize)]
 pub struct VideoTaskSubmitResult {
+    /// Local short id for `task show N` / `task wait N`.
+    pub id: i64,
     #[serde(rename = "async")]
     pub is_async: bool,
     pub task_id: String,
@@ -136,7 +138,9 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     )?;
 
     if req.async_mode {
+        let record = api.db.get_video_task(&task_id)?;
         let submit = VideoTaskSubmitResult {
+            id: record.id,
             is_async: true,
             task_id: task_id.clone(),
             status: created.status.clone(),
@@ -163,6 +167,7 @@ fn print_submit_result(result: &VideoTaskSubmitResult, format: OutputFormat) -> 
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(result)?),
         OutputFormat::Plain => {
             println!("async=true");
+            println!("id={}", result.id);
             println!("task_id={}", result.task_id);
             println!("status={}", result.status);
             println!("phase={}", result.phase);

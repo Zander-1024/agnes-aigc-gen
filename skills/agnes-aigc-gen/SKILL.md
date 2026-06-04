@@ -176,11 +176,13 @@ agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
   -i asset://c8d4eb63a84b
 agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
 agnes-aigc-gen video --task-id task_xxxxxxxx
-agnes-aigc-gen video -p "Ocean sunset" --async   # submit only; returns task_id
-agnes-aigc-gen task list                         # recent tasks (default 10)
-agnes-aigc-gen task show task_xxxxxxxx           # one-shot API refresh
-agnes-aigc-gen task wait task_xxxxxxxx           # poll until done
+agnes-aigc-gen video -p "Ocean sunset" --async   # returns local id + vendor task_id
+agnes-aigc-gen task list                         # refreshes in-progress; shows ID column
+agnes-aigc-gen task show 3                        # local id (or vendor task_id)
+agnes-aigc-gen task wait 3                         # poll until done
 ```
+
+**Task ids:** `task_id` is returned by Agnes API. Each submit also gets a local **`id`** (1, 2, 3…) in SQLite — use `task show 3` / `task wait 3` instead of the long vendor id.
 
 ### Input modes
 
@@ -203,16 +205,18 @@ All frame URLs must share the same aspect ratio. CLI does **not** upload local f
 | ≤ 2 min | 30s |
 | > 2 min | 15s |
 
-Wait for command to finish; queued tasks are normal. Use `--async` to submit without waiting; track with `task list` / `task show` / `task wait`.
+Wait for command to finish; queued tasks are normal. Use `--async` to submit without waiting; track with `task list` / `task show <id>` / `task wait <id>`.
 
 ### Video async tasks
 
 | Command | Purpose |
 |---------|---------|
-| `video --async` | Submit task, print `task_id`, record in SQLite |
-| `task list [-n N]` | Last N tasks: phase (`processing` / `success` / `failed`), URI when done |
-| `task show <id>` | One GET refresh from API, update local record |
-| `task wait <id>` | Same as `video --task-id` (block until complete) |
+| `video --async` | Submit task; JSON includes local `id` + vendor `task_id` |
+| `task list [-n N]` | Last N tasks (refreshes **processing** from API); columns: ID, TASK_ID, PHASE, PROMPT, URI |
+| `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor `task_id` |
+| `task wait <ref>` | Same as `video --task-id` (block until complete) |
+
+Vendor `task_id` comes from Agnes API; local `id` is assigned by SQLite on submit.
 
 ### Video flags
 

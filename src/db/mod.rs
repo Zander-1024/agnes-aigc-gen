@@ -38,6 +38,9 @@ pub struct GenerationRecord {
 /// Local record of an Agnes video async task (`POST /videos` → poll `GET /videos/{id}`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoTaskRecord {
+    /// Local short id (1, 2, 3…); use with `task show 3` / `task wait 3`.
+    pub id: i64,
+    /// Vendor task id returned by Agnes API (`POST /videos`).
     pub task_id: String,
     /// API status: `queued`, `in_progress`, `completed`, `failed`
     pub status: String,
@@ -111,7 +114,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_assets_created ON assets(created_at DESC);
 
             CREATE TABLE IF NOT EXISTS video_tasks (
-                task_id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL,
                 prompt TEXT,
                 input_json TEXT,
@@ -127,7 +131,61 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_video_tasks_updated ON video_tasks(updated_at DESC);
             ",
         )?;
+        self.migrate_video_tasks_local_id()?;
         Ok(())
+    }
+
+    /// Upgrade legacy `video_tasks` (task_id PRIMARY KEY) to include local `id`.
+    fn migrate_video_tasks_local_id(&self) -> Result<()> {
+        if self.table_has_column("video_tasks", "id")? {
+            return Ok(());
+        }
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='video_tasks'", [], |r| {
+                r.get(0)
+            })?;
+        if count == 0 {
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            "
+            CREATE TABLE video_tasks_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                prompt TEXT,
+                input_json TEXT,
+                progress INTEGER,
+                video_url TEXT,
+                asset_id TEXT,
+                error_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (asset_id) REFERENCES assets(id)
+            );
+            INSERT INTO video_tasks_new (task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at)
+                SELECT task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+                FROM video_tasks;
+            DROP TABLE video_tasks;
+            ALTER TABLE video_tasks_new RENAME TO video_tasks;
+            CREATE INDEX IF NOT EXISTS idx_video_tasks_updated ON video_tasks(updated_at DESC);
+            ",
+        )?;
+        Ok(())
+    }
+
+    fn table_has_column(&self, table: &str, column: &str) -> Result<bool> {
+        let sql = format!("PRAGMA table_info({table})");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Resolve `asset://id` to the stored remote URL; pass through anything else.
@@ -306,7 +364,7 @@ impl Database {
     pub fn get_video_task(&self, task_id: &str) -> Result<VideoTaskRecord> {
         self.conn
             .query_row(
-                "SELECT task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+                "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
                  FROM video_tasks WHERE task_id = ?1",
                 params![task_id],
                 |row| map_video_task_row(row),
@@ -314,9 +372,34 @@ impl Database {
             .with_context(|| format!("video task not found: {task_id}"))
     }
 
+    pub fn get_video_task_by_local_id(&self, local_id: i64) -> Result<VideoTaskRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+                 FROM video_tasks WHERE id = ?1",
+                params![local_id],
+                |row| map_video_task_row(row),
+            )
+            .with_context(|| format!("video task #{local_id} not found"))
+    }
+
+    /// Map a CLI reference to the vendor task id: local id (`3`, `#3`) or full vendor id.
+    pub fn resolve_video_task_ref(&self, reference: &str) -> Result<String> {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            anyhow::bail!("task reference required");
+        }
+        let local_ref = reference.strip_prefix('#').unwrap_or(reference);
+        if local_ref.chars().all(|c| c.is_ascii_digit()) {
+            let local_id: i64 = local_ref.parse().context("invalid local task id")?;
+            return Ok(self.get_video_task_by_local_id(local_id)?.task_id);
+        }
+        Ok(reference.to_string())
+    }
+
     pub fn list_video_tasks(&self, limit: usize) -> Result<Vec<VideoTaskRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
+            "SELECT id, task_id, status, prompt, input_json, progress, video_url, asset_id, error_json, created_at, updated_at
              FROM video_tasks ORDER BY updated_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| map_video_task_row(row))?;
@@ -325,26 +408,27 @@ impl Database {
 }
 
 fn map_video_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoTaskRecord> {
-    let status: String = row.get(1)?;
-    let asset_id: Option<String> = row.get(6)?;
+    let status: String = row.get(2)?;
+    let asset_id: Option<String> = row.get(7)?;
     Ok(VideoTaskRecord {
-        task_id: row.get(0)?,
+        id: row.get(0)?,
+        task_id: row.get(1)?,
         phase: VideoTaskRecord::phase_from_status(&status).to_string(),
         status,
-        prompt: row.get(2)?,
+        prompt: row.get(3)?,
         input_json: row
-            .get::<_, Option<String>>(3)?
+            .get::<_, Option<String>>(4)?
             .map(|s| parse_json_col(s))
             .transpose()?,
-        progress: row.get(4)?,
-        uri: row.get(5)?,
+        progress: row.get(5)?,
+        uri: row.get(6)?,
         asset_uri: asset_id.map(|id| format!("asset://{id}")),
         error: row
-            .get::<_, Option<String>>(7)?
+            .get::<_, Option<String>>(8)?
             .map(|s| parse_json_col(s))
             .transpose()?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -388,7 +472,10 @@ mod tests {
         let row = db
             .insert_video_task("task_abc", "queued", Some("ocean"), None, Some(0))
             .unwrap();
+        assert_eq!(row.id, 1);
         assert_eq!(row.phase, "processing");
+        assert_eq!(db.resolve_video_task_ref("1").unwrap(), "task_abc");
+        assert_eq!(db.resolve_video_task_ref("#1").unwrap(), "task_abc");
         let updated = db
             .update_video_task(
                 "task_abc",

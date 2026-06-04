@@ -3,6 +3,7 @@ use clap::Args;
 use log;
 
 use crate::api::{ApiClient, VideoRequest, generate_video};
+use crate::cli::task::resolve_task_ref;
 use crate::config::AppConfig;
 use crate::output::OutputFormat;
 use crate::ratio::{AspectRatio, max_video_duration, resolve_video_timing, validate_frame_rate};
@@ -88,6 +89,10 @@ pub fn run(args: VideoArgs) -> Result<()> {
 
     let api = ApiClient::with_overrides(cfg, args.output_dir.clone(), None, args.retries)?;
     let async_mode = args.async_mode && args.task_id.is_none();
+    let task_id = match args.task_id {
+        Some(ref tid) => Some(resolve_task_ref(tid)?),
+        None => None,
+    };
 
     generate_video(
         &api,
@@ -99,7 +104,7 @@ pub fn run(args: VideoArgs) -> Result<()> {
             duration: args.duration,
             frame_rate: args.frame_rate,
             images: args.images,
-            task_id: args.task_id,
+            task_id,
             async_mode,
             output_dir: args.output_dir,
             save_local: args.save,

@@ -116,7 +116,7 @@ jobs:
         run: |
           $version = "${{ needs.prepare.outputs.version }}"
           $platform = "${{ matrix.platform }}"
-          $archive = "${{ env:BIN_NAME }}-${version}-${platform}.zip"
+          $archive = "${{ env.BIN_NAME }}-${version}-${platform}.zip"
           $bin = "target/${{ matrix.target }}/release/${{ matrix.bin }}"
           Compress-Archive -Path $bin -DestinationPath $archive -Force
           echo "ARCHIVE=$archive" >> $env:GITHUB_ENV

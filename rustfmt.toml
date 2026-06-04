@@ -1,0 +1,4 @@
+max_width = 120
+# Keep short struct literals and array elements on one line when they fit.
+struct_lit_width = 120
+array_width = 120

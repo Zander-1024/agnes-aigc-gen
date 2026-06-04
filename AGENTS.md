@@ -19,26 +19,33 @@ cargo test
 cargo build --release
 ```
 
-## Release (maintainers)
+## Commit and push (default)
 
-1. Ensure `Cargo.toml` `version` matches the tag (e.g. `0.2.0` → `v0.2.0`).
-2. Run `./scripts/ci-local.sh` on the release commit.
-3. Tag and push:
+After `./scripts/ci-local.sh` passes:
 
 ```bash
-git tag v0.2.0
 git push origin master
-git push origin v0.2.0
 ```
 
-Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) (multi-platform binaries + GitHub Release).
+**Do not** force-push tags, retag, or re-trigger Release unless the user **explicitly** asks (e.g. “重新打 tag 发版”).
 
-To re-release after a failed tag build, move the tag to the fixed commit:
+## Release (maintainers, only when requested)
+
+Only when the user asks for a version release:
+
+1. Bump `Cargo.toml` `version` to match the new tag (e.g. `0.2.1` → `v0.2.1`).
+2. Run `./scripts/ci-local.sh` on the release commit.
+3. Create a **new** tag and push:
 
 ```bash
-git tag -f v0.2.0
-git push origin v0.2.0 --force
+git tag v0.2.1
+git push origin master
+git push origin v0.2.1
 ```
+
+Pushing a new `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) (multi-platform binaries + GitHub Release).
+
+**Retag / force-push** (`git tag -f`, `git push --force`) — only if the user explicitly requests re-releasing an existing tag after a failed build. Never do this proactively.
 
 ## Project conventions
 

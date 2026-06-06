@@ -2,9 +2,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use reqwest::StatusCode;
+use reqwest::{StatusCode, Url};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::api::ApiClient;
 use crate::api::image::resolve_image_seed;
@@ -51,8 +51,8 @@ pub struct VideoTaskSubmitResult {
 }
 
 pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationResult> {
-    if let Some(ref task_id) = req.task_id {
-        return poll_and_finalize(api, task_id, &req, None);
+    if let Some(ref query_id) = req.task_id {
+        return poll_and_finalize(api, query_id, &req, None);
     }
 
     let (num_frames, actual_duration) = resolve_video_timing(req.duration, req.frame_rate)?;
@@ -68,7 +68,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         .map(|s| api.db.resolve_reference(s))
         .collect::<Result<_>>()?;
 
-    let input_record = json!({
+    let mut input_record = json!({
         "prompt": req.prompt,
         "negative_prompt": req.negative_prompt,
         "seed": seed,
@@ -125,11 +125,13 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         bail!("video task creation failed ({status}): {text}");
     }
     let created: VideoTaskResponse = resp.json().context("parse video create response")?;
-    let task_id = created.task_id().context("missing task_id")?;
-    log::debug!("video task created: {task_id}");
+    let query_ids = created.query_ids();
+    let query_id = query_ids.first().cloned().context("missing video_id/task_id")?;
+    record_video_query_ids(&mut input_record, &query_ids, &created);
+    log::debug!("video task created, query_id={query_id}");
 
     api.db.insert_video_task(
-        &task_id,
+        &query_id,
         &created.status,
         Some(&req.prompt),
         Some(&input_record),
@@ -137,11 +139,11 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     )?;
 
     if req.async_mode {
-        let record = api.db.get_video_task(&task_id)?;
+        let record = api.db.get_video_task(&query_id)?;
         let submit = VideoTaskSubmitResult {
             id: record.id,
             is_async: true,
-            task_id: task_id.clone(),
+            task_id: query_id.clone(),
             status: created.status.clone(),
             phase: VideoTaskRecord::phase_from_status(&created.status).to_string(),
         };
@@ -158,7 +160,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         });
     }
 
-    poll_and_finalize(api, &task_id, &req, Some(input_record))
+    poll_and_finalize(api, &query_id, &req, Some(input_record))
 }
 
 fn print_submit_result(result: &VideoTaskSubmitResult, format: OutputFormat) -> Result<()> {
@@ -183,10 +185,25 @@ fn poll_interval(elapsed: Duration) -> Duration {
     }
 }
 
+fn record_video_query_ids(input_record: &mut Value, query_ids: &[String], created: &VideoTaskResponse) {
+    let Some(obj) = input_record.as_object_mut() else {
+        return;
+    };
+    obj.insert("video_query_ids".to_string(), json!(query_ids));
+    if let Some(ref video_id) = created.video_id {
+        obj.insert("video_id".to_string(), json!(video_id));
+    }
+    if let Some(ref id) = created.id {
+        obj.insert("response_id".to_string(), json!(id));
+    }
+    if let Some(ref task_id) = created.task_id {
+        obj.insert("task_id".to_string(), json!(task_id));
+    }
+}
+
 /// Single GET for a video task (no polling loop).
-pub fn fetch_video_task_once(api: &ApiClient, task_id: &str) -> Result<VideoTaskResponse> {
-    let path = format!("videos/{task_id}");
-    let resp = api.get_json(&path)?;
+pub fn fetch_video_task_once(api: &ApiClient, query_id: &str) -> Result<VideoTaskResponse> {
+    let resp = get_video_query(api, query_id)?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
@@ -196,15 +213,45 @@ pub fn fetch_video_task_once(api: &ApiClient, task_id: &str) -> Result<VideoTask
     resp.json().context("parse video task")
 }
 
+fn get_video_query(api: &ApiClient, query_id: &str) -> Result<reqwest::blocking::Response> {
+    if is_video_id(query_id) {
+        let url = video_id_result_url(&api.config.base_url, &api.config.video_model, query_id)?;
+        return api.get_json_url(&url);
+    }
+    let path = format!("videos/{query_id}");
+    api.get_json(&path)
+}
+
+fn is_video_id(query_id: &str) -> bool {
+    query_id.trim_start().starts_with("video_")
+}
+
+fn video_id_result_url(base_url: &str, video_model: &str, video_id: &str) -> Result<String> {
+    let mut url = Url::parse(base_url.trim()).context("parse base_url")?;
+    let path = url.path().trim_end_matches('/');
+    let root_path = path.strip_suffix("/v1").unwrap_or(path).trim_end_matches('/');
+    let agnesapi_path = if root_path.is_empty() {
+        "/agnesapi".to_string()
+    } else {
+        format!("{root_path}/agnesapi")
+    };
+    url.set_path(&agnesapi_path);
+    url.set_query(None);
+    url.query_pairs_mut()
+        .append_pair("video_id", video_id)
+        .append_pair("model_name", video_model);
+    Ok(url.into())
+}
+
 /// Refresh one task from the API and persist status in SQLite.
-pub fn refresh_video_task(api: &ApiClient, task_id: &str) -> Result<VideoTaskRecord> {
-    let task = fetch_video_task_once(api, task_id)?;
-    persist_task_from_response(api, task_id, &task)
+pub fn refresh_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskRecord> {
+    let task = fetch_video_task_once(api, query_id)?;
+    persist_task_from_response(api, query_id, &task)
 }
 
 pub fn wait_video_task(
     api: &ApiClient,
-    task_id: &str,
+    query_id: &str,
     save_local: bool,
     output_format: OutputFormat,
 ) -> Result<GenerationResult> {
@@ -216,7 +263,7 @@ pub fn wait_video_task(
         duration: 5.0,
         frame_rate: 24,
         images: vec![],
-        task_id: Some(task_id.to_string()),
+        task_id: Some(query_id.to_string()),
         async_mode: false,
         output_dir: None,
         save_local,
@@ -224,14 +271,14 @@ pub fn wait_video_task(
         output_format,
         quiet: false,
     };
-    poll_and_finalize(api, task_id, &req, None)
+    poll_and_finalize(api, query_id, &req, None)
 }
 
-fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskResponse) -> Result<VideoTaskRecord> {
+fn persist_task_from_response(api: &ApiClient, query_id: &str, task: &VideoTaskResponse) -> Result<VideoTaskRecord> {
     let remote = task.result_url();
     let asset_id = if task.status == "completed" {
         if let Some(ref url) = remote {
-            resolve_or_create_video_asset(api, task_id, url)?
+            resolve_or_create_video_asset(api, query_id, url)?
         } else {
             None
         }
@@ -239,9 +286,9 @@ fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskRe
         None
     };
 
-    match api.db.get_video_task(task_id) {
+    match api.db.get_video_task(query_id) {
         Ok(_) => api.db.update_video_task(
-            task_id,
+            query_id,
             &task.status,
             task.progress,
             remote.as_deref(),
@@ -250,9 +297,9 @@ fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskRe
         ),
         Err(_) => {
             api.db
-                .insert_video_task(task_id, &task.status, None, None, task.progress)?;
+                .insert_video_task(query_id, &task.status, None, None, task.progress)?;
             api.db.update_video_task(
-                task_id,
+                query_id,
                 &task.status,
                 task.progress,
                 remote.as_deref(),
@@ -263,8 +310,8 @@ fn persist_task_from_response(api: &ApiClient, task_id: &str, task: &VideoTaskRe
     }
 }
 
-fn resolve_or_create_video_asset(api: &ApiClient, task_id: &str, url: &str) -> Result<Option<String>> {
-    if let Ok(existing) = api.db.get_video_task(task_id)
+fn resolve_or_create_video_asset(api: &ApiClient, query_id: &str, url: &str) -> Result<Option<String>> {
+    if let Ok(existing) = api.db.get_video_task(query_id)
         && let Some(ref asset_uri) = existing.asset_uri
         && let Some(id) = asset_uri.strip_prefix("asset://")
     {
@@ -274,15 +321,14 @@ fn resolve_or_create_video_asset(api: &ApiClient, task_id: &str, url: &str) -> R
     Ok(Some(asset.id))
 }
 
-pub fn poll_video_task(api: &ApiClient, task_id: &str) -> Result<VideoTaskResponse> {
-    let path = format!("videos/{task_id}");
+pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskResponse> {
     let started = Instant::now();
     loop {
-        let resp = api.get_json(&path)?;
+        let resp = get_video_query(api, query_id)?;
         if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
             let wait = poll_interval(started.elapsed());
             log::debug!(
-                "video task {task_id} poll: 503 service unavailable, retry in {}s",
+                "video query {query_id} poll: 503 service unavailable, retry in {}s",
                 wait.as_secs()
             );
             thread::sleep(wait);
@@ -295,19 +341,22 @@ pub fn poll_video_task(api: &ApiClient, task_id: &str) -> Result<VideoTaskRespon
             bail!("poll video failed ({status}): {text}");
         }
         let task: VideoTaskResponse = resp.json().context("parse video task")?;
-        let _ = persist_task_from_response(api, task_id, &task);
+        let _ = persist_task_from_response(api, query_id, &task);
         match task.status.as_str() {
             "completed" => {
-                log::debug!("video task {task_id} completed");
+                log::debug!("video query {query_id} completed");
                 return Ok(task);
             }
             "failed" => {
-                log::debug!("video task {task_id} failed: {:?}", task.error);
+                log::debug!("video query {query_id} failed: {:?}", task.error);
                 bail!("video task failed: {:?}", task.error);
             }
             status => {
                 let wait = poll_interval(started.elapsed());
-                log::debug!("video task {task_id} status={status}, next poll in {}s", wait.as_secs());
+                log::debug!(
+                    "video query {query_id} status={status}, next poll in {}s",
+                    wait.as_secs()
+                );
                 thread::sleep(wait);
             }
         }
@@ -316,11 +365,11 @@ pub fn poll_video_task(api: &ApiClient, task_id: &str) -> Result<VideoTaskRespon
 
 fn poll_and_finalize(
     api: &ApiClient,
-    task_id: &str,
+    query_id: &str,
     req: &VideoRequest,
     input_record: Option<serde_json::Value>,
 ) -> Result<GenerationResult> {
-    let task = retry(api.config.max_retries, || poll_video_task(api, task_id))?;
+    let task = retry(api.config.max_retries, || poll_video_task(api, query_id))?;
     let remote = task.result_url().context("completed task missing video url")?;
 
     let save_local = req.save_local;
@@ -369,7 +418,7 @@ fn poll_and_finalize(
         .insert_asset("video", &remote, Some(&ratio_label), Some(&dims.size_string()))?;
 
     let _ = api.db.update_video_task(
-        task_id,
+        query_id,
         "completed",
         task.progress,
         Some(&remote),
@@ -473,5 +522,15 @@ mod tests {
         assert!(body.image.is_none());
         let extra = body.extra_body.as_ref().unwrap();
         assert_eq!(extra.image.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn video_id_result_url_uses_agnesapi_endpoint() {
+        let url = video_id_result_url("https://apihub.agnes-ai.com/v1", "agnes-video-v2.0", "video_abc==").unwrap();
+
+        assert_eq!(
+            url,
+            "https://apihub.agnes-ai.com/agnesapi?video_id=video_abc%3D%3D&model_name=agnes-video-v2.0"
+        );
     }
 }

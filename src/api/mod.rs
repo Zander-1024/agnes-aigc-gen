@@ -85,9 +85,13 @@ impl ApiClient {
             self.config.base_url.trim_end_matches('/'),
             path.trim_start_matches('/')
         );
-        logging::log_request("GET", &url, None);
+        self.get_json_url(&url)
+    }
+
+    pub fn get_json_url(&self, url: &str) -> Result<Response> {
+        logging::log_request("GET", url, None);
         let resp = retry(self.config.max_retries, || {
-            let resp = self.client.get(&url).bearer_auth(&self.api_key).send()?;
+            let resp = self.client.get(url).bearer_auth(&self.api_key).send()?;
             if should_retry_status(resp.status()) {
                 anyhow::bail!("retryable status {}", resp.status());
             }

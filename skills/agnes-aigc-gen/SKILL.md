@@ -107,7 +107,7 @@ Do **not** assume `~/.config` on macOS.
 | Endpoint | When |
 |----------|------|
 | `POST {base_url}/images/generations` | Image |
-| `POST {base_url}/videos` + poll `GET …/videos/{id}` | Video |
+| `POST {base_url}/videos` + poll `GET https://apihub.agnes-ai.com/agnesapi?video_id=…` | Video |
 
 Default `base_url`: `https://apihub.agnes-ai.com/v1`.
 
@@ -177,14 +177,14 @@ agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
   --negative-prompt "blurry, low quality, watermark" \
   -i asset://c8d4eb63a84b
 agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
-agnes-aigc-gen video --task-id task_xxxxxxxx
-agnes-aigc-gen video -p "Ocean sunset" --async   # returns local id + vendor task_id
+agnes-aigc-gen video --task-id video_xxxxxxxx
+agnes-aigc-gen video -p "Ocean sunset" --async   # returns local id + vendor query id
 agnes-aigc-gen task list                         # refreshes in-progress; shows ID column
-agnes-aigc-gen task show 3                        # local id (or vendor task_id)
+agnes-aigc-gen task show 3                        # local id (or vendor query id)
 agnes-aigc-gen task wait 3                         # poll until done
 ```
 
-**Task ids:** `task_id` is returned by Agnes API. Each submit also gets a local **`id`** (1, 2, 3…) in SQLite — use `task show 3` / `task wait 3` instead of the long vendor id.
+**Video query ids:** Agnes now prefers `video_id` for result queries via `/agnesapi?video_id=...`. The legacy `task_id` path remains `/v1/videos/{task_id}`. The CLI stores the preferred vendor query id plus a local **`id`** (1, 2, 3…) in SQLite — use `task show 3` / `task wait 3` instead of the long vendor id.
 
 ### Input modes
 
@@ -213,12 +213,12 @@ Wait for command to finish; queued tasks are normal. Use `--async` to submit wit
 
 | Command | Purpose |
 |---------|---------|
-| `video --async` | Submit task; JSON includes local `id` + vendor `task_id` |
+| `video --async` | Submit task; JSON includes local `id` + vendor query id as `task_id` |
 | `task list [-n N]` | Last N tasks (refreshes **processing** from API); columns: ID, TASK_ID, PHASE, PROMPT, URI |
-| `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor `task_id` |
+| `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor query id |
 | `task wait <ref>` | Same as `video --task-id` (block until complete) |
 
-Vendor `task_id` comes from Agnes API; local `id` is assigned by SQLite on submit.
+Vendor query id prefers Agnes `video_id` and uses the `/agnesapi` query endpoint. Legacy `id`/`task_id` responses are still accepted through `/v1/videos/{task_id}`. Local `id` is assigned by SQLite on submit.
 
 ### Video flags
 

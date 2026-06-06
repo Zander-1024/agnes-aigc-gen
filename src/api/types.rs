@@ -61,6 +61,7 @@ pub struct ExtraBodyVideo {
 #[derive(Debug, Deserialize)]
 pub struct VideoTaskResponse {
     pub id: Option<String>,
+    pub video_id: Option<String>,
     pub task_id: Option<String>,
     pub status: String,
     #[serde(default)]
@@ -72,11 +73,53 @@ pub struct VideoTaskResponse {
 }
 
 impl VideoTaskResponse {
-    pub fn task_id(&self) -> Option<String> {
-        self.task_id.clone().or_else(|| self.id.clone())
+    pub fn query_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        push_unique(&mut ids, self.video_id.as_deref());
+        push_unique(&mut ids, self.id.as_deref());
+        push_unique(&mut ids, self.task_id.as_deref());
+        ids
     }
 
     pub fn result_url(&self) -> Option<String> {
         self.video_url.clone().or_else(|| self.remixed_from_video_id.clone())
+    }
+}
+
+fn push_unique(ids: &mut Vec<String>, id: Option<&str>) {
+    let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    if !ids.iter().any(|existing| existing == id) {
+        ids.push(id.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_task_query_id_prefers_video_id() {
+        let task: VideoTaskResponse = serde_json::from_value(serde_json::json!({
+            "video_id": "video_123",
+            "id": "task_123",
+            "task_id": "legacy_123",
+            "status": "queued"
+        }))
+        .unwrap();
+
+        assert_eq!(task.query_ids(), ["video_123", "task_123", "legacy_123"]);
+    }
+
+    #[test]
+    fn video_task_query_id_falls_back_to_legacy_ids() {
+        let task: VideoTaskResponse = serde_json::from_value(serde_json::json!({
+            "task_id": "task_123",
+            "status": "queued"
+        }))
+        .unwrap();
+
+        assert_eq!(task.query_ids(), ["task_123"]);
     }
 }

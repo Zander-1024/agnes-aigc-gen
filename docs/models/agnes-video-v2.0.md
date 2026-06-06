@@ -28,7 +28,7 @@ Agnes-Video-V2.0 针对高质量视频生成和灵活创意控制进行了优化
 | 通过提示词控制主体运动、镜头运动和场景动态 | Scene Motion Control |
 | 在多帧之间保持较强的主体、风格和场景一致性 | Visual Consistency |
 | 生成适用于创意和商业用途的高质量电影级视频 | Cinematic Output |
-| 先提交任务，再通过任务 ID 获取结果 | Asynchronous API |
+| 先提交任务，再通过视频查询 ID 获取结果 | Asynchronous API |
 
 ---
 
@@ -56,7 +56,8 @@ Agnes-Video-V2.0 适用于以下场景：
 | 项目 | 说明 |
 | --- | --- |
 | API Endpoint - Create Task | https://apihub.agnes-ai.com/v1/videos |
-| API Endpoint - Retrieve Result | https://apihub.agnes-ai.com/v1/videos/{task_id} |
+| API Endpoint - Retrieve Result (video_id, recommended) | https://apihub.agnes-ai.com/agnesapi?video_id=<VIDEO_ID> |
+| API Endpoint - Retrieve Result (task_id, legacy-compatible) | https://apihub.agnes-ai.com/v1/videos/{task_id} |
 | Request Method - Create Task | POST |
 | Request Method - Retrieve Result | GET |
 | Content-Type | application/json |
@@ -78,11 +79,23 @@ Agnes-Video-V2.0 使用基于异步任务的工作流。
 https://apihub.agnes-ai.com/v1/videos
 ```
 
-API 会返回一个任务 ID。
+API 会同时返回 `video_id` 和 `task_id`。新接入推荐使用 `video_id` 查询；旧版 `task_id` 查询接口仍用于兼容已有接入逻辑。
 
 #### Step 2：获取视频结果
 
-使用任务 ID 发送 GET 请求到：
+推荐使用 `video_id` 发送 GET 请求到：
+
+```Plain Text
+https://apihub.agnes-ai.com/agnesapi?video_id=<VIDEO_ID>
+```
+
+也可以传入 `model_name` 显式指定模型：
+
+```Plain Text
+https://apihub.agnes-ai.com/agnesapi?video_id=<VIDEO_ID>&model_name=agnes-video-v2.0
+```
+
+兼容旧方式可使用 `task_id` 发送 GET 请求到：
 
 ```Plain Text
 https://apihub.agnes-ai.com/v1/videos/{task_id}
@@ -212,12 +225,12 @@ curl -X POST https://apihub.agnes-ai.com/v1/videos \
 {
   "request": {
     "method": "GET",
-    "url": "https://apihub.agnes-ai.com/v1/videos/task_YOUR_TASK_ID",
+    "url": "https://apihub.agnes-ai.com/agnesapi?video_id=video_YOUR_VIDEO_ID&model_name=agnes-video-v2.0",
     "headers": {
       "Authorization": "Bearer ***REDACTED***"
     },
-    "path_params": {
-      "task_id": "task_YOUR_TASK_ID"
+    "query_params": {
+      "video_id": "video_YOUR_VIDEO_ID"
     },
     "body": null
   }
@@ -234,6 +247,7 @@ curl -X POST https://apihub.agnes-ai.com/v1/videos \
     "status": 200,
     "body": {
       "id": "task_YOUR_TASK_ID",
+      "video_id": "video_YOUR_VIDEO_ID",
       "task_id": "task_YOUR_TASK_ID",
       "object": "video",
       "model": "agnes-video-v2.0",
@@ -252,6 +266,7 @@ curl -X POST https://apihub.agnes-ai.com/v1/videos \
     "status": 200,
     "body": {
       "id": "task_YOUR_TASK_ID",
+      "video_id": "video_YOUR_VIDEO_ID",
       "model": "agnes-video-v2.0",
       "object": "video",
       "status": "completed",
@@ -301,6 +316,7 @@ seconds = num_frames / frame_rate
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | id | string | 唯一任务 ID |
+| video_id | string | 视频查询 ID；获取结果时优先使用 |
 | object | string | 对象类型，固定为 video |
 | model | string | 使用的模型，固定为 agnes-video-v2.0 |
 | status | string | 任务状态 |
@@ -308,6 +324,7 @@ seconds = num_frames / frame_rate
 | created_at | integer | 任务创建时间戳 |
 | completed_at | integer | 任务完成时间戳；未完成时为 null |
 | video_url | string | 生成视频 URL，仅在 status 为 completed 时可用 |
+| remixed_from_video_id | string | 生成视频 URL；Agnes-Video-V2.0 完成响应可能使用该字段 |
 | size | string | 视频分辨率，格式为 width x height |
 | seconds | string | 视频时长，单位为秒 |
 | usage | object | 使用量信息 |
@@ -442,8 +459,10 @@ Create a smooth transition from the first keyframe to the second keyframe, maint
 ### 说明
 
 - 使用 agnes-video-v2.0 作为模型名称
-- 视频生成是异步任务，需要先创建任务，再通过任务 ID 获取结果
-- video_url 仅在任务状态为 completed 时可用
+- 视频生成是异步任务，需要先创建任务，再通过查询接口获取结果
+- 获取结果时优先使用 `video_id` 查询接口：`/agnesapi?video_id=<VIDEO_ID>`
+- 旧版 `task_id` 查询接口仍兼容：`/v1/videos/{task_id}`
+- video_url / remixed_from_video_id 仅在任务状态为 completed 时可用
 - num_frames 必须小于或等于 441
 - num_frames 必须满足 8n + 1，例如 81、121、161、241 或 441
 - 文生视频任务仅要求传入 model 和 prompt

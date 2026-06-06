@@ -53,7 +53,7 @@ Pushing a new `v*` tag triggers [`.github/workflows/release.yml`](.github/workfl
 - **Video `-i`:** HTTPS URL or `asset://` only (no local paths for video).
 - **Image `-i`:** local path, URL, `asset://`, base64, data URI.
 - **Async video:** `video --async` → local SQLite `id` + vendor `task_id`; `task list` / `task show <id>` / `task wait <id>`.
-- **Docs:** user-facing CLI usage in [`skills/agnes-aigc-gen/SKILL.md`](skills/agnes-aigc-gen/SKILL.md); install/config in [`SETUP.md`](skills/agnes-aigc-gen/SETUP.md).
+- **Docs:** user-facing CLI usage in [`skills/agnes-aigc-gen/SKILL.md`](skills/agnes-aigc-gen/SKILL.md); install/config in [`docs/SETUP.md`](docs/SETUP.md).
 - **Do not commit:** `.env`, API keys, or local smoke-test logs.
 
 ## Key paths

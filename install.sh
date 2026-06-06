@@ -7,9 +7,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="agnes-aigc-gen"
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-$HOME/.local/bin}"
 SKILL_SRC="$ROOT/skills/agnes-aigc-gen"
+SETUP_SRC="$ROOT/docs/SETUP.md"
+export SETUP_SRC
 
 # shellcheck source=scripts/install-skill.sh
 source "$ROOT/scripts/install-skill.sh"
+# shellcheck source=scripts/write-install-state.sh
+source "$ROOT/scripts/write-install-state.sh"
 
 echo "==> Building release binary..."
 cd "$ROOT"
@@ -37,6 +41,9 @@ if [[ "${SKIP_SKILL:-0}" != "1" ]]; then
   echo ""
   skill_install_summary
 fi
+
+PKG_VERSION="$(grep '^version' "$ROOT/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+write_install_state "$INSTALL_BIN_DIR/$BIN_NAME" "$PKG_VERSION"
 
 echo ""
 echo "Done."

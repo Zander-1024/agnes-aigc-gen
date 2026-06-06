@@ -3,7 +3,9 @@ mod dashboard;
 mod history;
 mod image;
 mod list_tui;
+mod self_cmd;
 mod task;
+mod version;
 mod video;
 
 use anyhow::Result;
@@ -12,6 +14,10 @@ use clap::Subcommand;
 pub use chat::ChatArgs;
 pub use image::ImageArgs;
 pub use video::VideoArgs;
+
+pub fn print_version_short() {
+    version::print_short();
+}
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -31,6 +37,11 @@ pub enum Command {
     Dashboard,
     /// Chat with Agnes agent
     Chat(ChatArgs),
+    /// Show version information
+    Version(version::VersionCmd),
+    /// Manage the installed binary (update / uninstall)
+    #[command(name = "self")]
+    ManageSelf(self_cmd::SelfCmd),
 }
 
 pub fn run(command: Command) -> Result<()> {
@@ -43,5 +54,7 @@ pub fn run(command: Command) -> Result<()> {
         Command::Config(cmd) => crate::config::run(cmd),
         Command::Dashboard => dashboard::run(),
         Command::Chat(args) => chat::run(args),
+        Command::Version(cmd) => version::run(cmd),
+        Command::ManageSelf(cmd) => self_cmd::run(cmd),
     }
 }

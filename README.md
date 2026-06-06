@@ -11,9 +11,10 @@ CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) image and video 
 - **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
 - **Asset history** — SQLite `asset://` references for image → video workflows
 - **Agent chat TUI** — PI-based terminal agent with tool calls, skills, approvals, thinking mode, and async video submission
-- **Encrypted config** — API key encrypted, machine-bound (see config dir in [SETUP.md](skills/agnes-aigc-gen/SETUP.md))
+- **Encrypted config** — API key encrypted, machine-bound (see config dir in [SETUP.md](docs/SETUP.md))
 - **Dashboard** — `agnes-aigc-gen dashboard` (ratatui terminal UI)
 - **Agent skill** — Cursor skill under `skills/agnes-aigc-gen/`
+- **Self update** — `self update` from GitHub Releases; optional skill refresh with remembered install paths
 
 ## Requirements
 
@@ -41,7 +42,7 @@ irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
 
-Pin version: `AGNES_AIGC_VERSION=0.3.2` before the curl/irm command.
+Pin version: `AGNES_AIGC_VERSION=0.4.0` before the curl/irm command.
 
 ### Source install (developers)
 
@@ -71,7 +72,7 @@ agnes-aigc-gen config set api-key YOUR_API_KEY
 agnes-aigc-gen config show
 ```
 
-API key is encrypted in `{config_dir}/config.toml`. Full setup: [skills/agnes-aigc-gen/SETUP.md](skills/agnes-aigc-gen/SETUP.md). Command reference: [SKILL.md](skills/agnes-aigc-gen/SKILL.md).
+API key is encrypted in `{config_dir}/config.toml`. Full setup: [docs/SETUP.md](docs/SETUP.md). Command reference: [SKILL.md](skills/agnes-aigc-gen/SKILL.md).
 
 **Defaults**
 
@@ -108,8 +109,13 @@ agnes-aigc-gen video -p "Subtle motion" -d 3 \
   --negative-prompt "blurry, watermark" \
   -i asset://<id-from-json>
 
+# Version and update
+agnes-aigc-gen -v
+agnes-aigc-gen version check
+agnes-aigc-gen self update
+
 # Verbose polling logs
-agnes-aigc-gen -v video -p "Ocean waves" --ratio 16:9 -d 5
+agnes-aigc-gen --verbose video -p "Ocean waves" --ratio 16:9 -d 5
 
 # Async video: submit and return task_id immediately
 agnes-aigc-gen video -p "Ocean waves" --ratio 16:9 -d 5 --async
@@ -173,7 +179,7 @@ Chat completion requests automatically try up to 3 total attempts for retryable 
 
 Video tool calls submit asynchronously by default and return a local task id. Use `/tasks` or the regular `task list/show/wait` commands to follow progress.
 
-See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](skills/agnes-aigc-gen/SETUP.md) (install & config).
+See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage), and [SETUP.md](docs/SETUP.md) (install & config).
 
 ## API reference docs
 
@@ -217,7 +223,8 @@ Batch image (`-n 2–4`):
 | `--save` | Download to `output_dir` |
 | `--output-format plain` | Print `uri` only |
 | `--retries` | API retry count |
-| `-v` / `--verbose` | Debug logs on stderr |
+| `-v` / `-V` | Print version and exit |
+| `--verbose` | Debug logs on stderr |
 
 ## Development
 
@@ -230,9 +237,9 @@ cargo run -- config show
 ## Project layout
 
 ```
-docs/                    # Agnes API reference (image, video, text)
+docs/                    # Agnes API reference + SETUP.md (install & config)
 scripts/                 # install-skill.sh / install-skill.ps1
-skills/agnes-aigc-gen/   # SKILL.md (usage) + SETUP.md (install & config)
+skills/agnes-aigc-gen/   # SKILL.md (agent usage)
 src/cli/                 # image, video, task, config, dashboard, chat
 src/ui/                  # ratatui dashboard + chat TUI
 src/api/                 # Agnes HTTP client

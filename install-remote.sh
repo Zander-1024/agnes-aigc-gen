@@ -48,6 +48,17 @@ install_skill() {
   skill_install_summary
 }
 
+write_install_state_file() {
+  local tag="v${VERSION}"
+  local tmp_script
+  tmp_script="$(mktemp)"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${tag}/scripts/write-install-state.sh" -o "$tmp_script"
+  # shellcheck source=/dev/null
+  source "$tmp_script"
+  write_install_state "$INSTALL_BIN_DIR/$BIN_NAME" "$VERSION"
+  rm -f "$tmp_script"
+}
+
 PLATFORM="$(detect_platform)"
 VERSION="$(resolve_version)"
 TAG="v${VERSION}"
@@ -72,6 +83,7 @@ tar -xzf "$TMP/${ARCHIVE}" -C "$TMP"
 install -m 755 "$TMP/${BIN_NAME}" "$INSTALL_BIN_DIR/${BIN_NAME}"
 
 install_skill
+write_install_state_file
 
 if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
   echo ""

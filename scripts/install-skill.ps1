@@ -50,10 +50,10 @@ function Install-SkillFromRemote {
         $dest = Join-Path $parent $script:SkillName
         Write-Host "==> Installing skill to $dest"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        foreach ($file in @("SKILL.md", "SETUP.md")) {
-            $uri = "https://raw.githubusercontent.com/$Repo/$Tag/skills/$($script:SkillName)/$file"
-            Invoke-WebRequest -Uri $uri -OutFile (Join-Path $dest $file)
-        }
+        $skillUri = "https://raw.githubusercontent.com/$Repo/$Tag/skills/$($script:SkillName)/SKILL.md"
+        Invoke-WebRequest -Uri $skillUri -OutFile (Join-Path $dest "SKILL.md")
+        $setupUri = "https://raw.githubusercontent.com/$Repo/$Tag/docs/SETUP.md"
+        Invoke-WebRequest -Uri $setupUri -OutFile (Join-Path $dest "SETUP.md")
     }
 }
 

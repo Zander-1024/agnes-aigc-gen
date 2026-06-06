@@ -31,7 +31,8 @@ CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 | **Video `frame_rate`** | **1–60** (default 24) |
 | **Video prompt** | Required unless `--task-id` |
 | **Chain i2v** | Generate image first → use `asset_uri` as `-i asset://<id>` |
-| **Verbose** | Global `-v` / `--verbose` only |
+| **Version** | Global `-v` / `-V` prints version and exits |
+| **Verbose** | Global `--verbose` only (no `-v` short form) |
 | **Downloads** | `--save` on command; not `config save-local` |
 | **`num_inference_steps`** | Not supported by CLI; never sent for image or video |
 | **Chat video tools** | Prefer async video submission; use task tools to follow progress |
@@ -60,11 +61,25 @@ Every option has a **long form** (`--prompt`, `--ratio`, …). Short forms (`-p`
 ## Global flags
 
 ```bash
-agnes-aigc-gen -v image ...
+agnes-aigc-gen -v                  # version
+agnes-aigc-gen --verbose image ...
 agnes-aigc-gen --verbose video ...
 ```
 
-Without `-v`, only JSON/plain result on stdout.
+Without `--verbose`, only JSON/plain result on stdout.
+
+## Version, update, uninstall
+
+| Command | Purpose |
+|---------|---------|
+| `-v` / `-V` | Print current version and exit |
+| `version` | Same as `-v`; `version check` compares GitHub latest; `version changelog` prints CHANGELOG |
+| `self update` | Download newer release binary; interactively offers skill refresh to previous or default paths |
+| `self update -y` | Update binary only, no prompts |
+| `self update -y --update-skill` | Update binary + skill at recorded `install.toml` targets |
+| `self uninstall` | Stepwise remove binary, skills, and optionally config/data |
+
+Install locations are recorded in `{config_dir}/install.toml` after `install.sh` / `install-remote.sh`.
 
 ## Runtime file dependencies
 
@@ -246,7 +261,7 @@ Vendor query id prefers Agnes `video_id` and uses the `/agnesapi` query endpoint
 agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
 # → parse asset_uri from JSON
 
-agnes-aigc-gen -v video -p "Subtle motion" --ratio 9:16 -d 3 -i asset://<id>
+agnes-aigc-gen --verbose video -p "Subtle motion" --ratio 9:16 -d 3 -i asset://<id>
 ```
 
 Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Match ratio. `-d` ≤ 18 @ 24fps.

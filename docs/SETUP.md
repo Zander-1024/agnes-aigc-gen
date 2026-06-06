@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/i
 **Pin a version:**
 
 ```bash
-AGNES_AIGC_VERSION=0.3.2 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
+AGNES_AIGC_VERSION=0.4.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -39,7 +39,7 @@ install-remote.bat
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `AGNES_AIGC_VERSION` | latest release | e.g. `0.3.2` or `v0.3.2` |
+| `AGNES_AIGC_VERSION` | latest release | e.g. `0.4.0` or `v0.4.0` |
 | `AGNES_AIGC_REPO` | `Zander-1024/agnes-aigc-gen` | Override repo |
 | `INSTALL_BIN_DIR` | `~/.local/bin` (Unix) / `%USERPROFILE%\.local\bin` (Windows) | Binary install path |
 | `INSTALL_SKILL_DIR` | (unset) | If set, install skill **only** to this directory (overrides default) |
@@ -80,7 +80,17 @@ Verify:
 
 ```bash
 agnes-aigc-gen --help
+agnes-aigc-gen -v
 ```
+
+### Install state (`install.toml`)
+
+Release and source installs write `{config_dir}/install.toml` with:
+
+- `binary_path` — where the CLI binary was installed
+- `skill_targets` — parent directories that received `agnes-aigc-gen/SKILL.md`
+
+`self update` uses this file to recommend skill refresh locations.
 
 ---
 
@@ -133,7 +143,7 @@ Skip skill install: `SKIP_SKILL=1 ./install-remote.sh`
 mkdir -p ~/.agents/skills/agnes-aigc-gen
 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/skills/agnes-aigc-gen/SKILL.md \
   -o ~/.agents/skills/agnes-aigc-gen/SKILL.md
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/skills/agnes-aigc-gen/SETUP.md \
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/docs/SETUP.md \
   -o ~/.agents/skills/agnes-aigc-gen/SETUP.md
 ```
 
@@ -255,7 +265,29 @@ agnes-aigc-gen image -p "test" --ratio 1:1
 
 ---
 
-## 6. Release & tags (maintainers)
+## 6. Update and uninstall
+
+```bash
+agnes-aigc-gen version check          # compare with GitHub latest
+agnes-aigc-gen self update            # download newer binary; optional skill refresh
+agnes-aigc-gen self update -y         # binary only, no prompts
+agnes-aigc-gen self update -y --update-skill   # binary + skill at recorded paths
+agnes-aigc-gen self uninstall         # stepwise: binary, skills, config/data
+agnes-aigc-gen version changelog      # embedded CHANGELOG
+```
+
+Interactive `self update` offers:
+
+1. Update skill to **previous install locations** (from `install.toml`, recommended)
+2. Update skill to **default only** (`~/.agents/skills`)
+3. **Custom** parent directory(s)
+4. **Skip** skill update (binary only)
+
+`self uninstall` asks separately whether to remove the binary, skill directories, and local config/database.
+
+---
+
+## 7. Release & tags (maintainers)
 
 Pushing a **`v*`** tag triggers `.github/workflows/release.yml`:
 
@@ -267,7 +299,7 @@ Tag version must match `Cargo.toml` `version`.
 
 ---
 
-## 7. Troubleshooting setup
+## 8. Troubleshooting setup
 
 | Problem | Fix |
 |---------|-----|

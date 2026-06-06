@@ -60,19 +60,36 @@ skill_resolve_target_dirs() {
   printf '%s\n' "${dirs[@]}" | awk '!seen[$0]++'
 }
 
+skill_setup_src() {
+  if [[ -n "${SETUP_SRC:-}" && -f "$SETUP_SRC" ]]; then
+    echo "$SETUP_SRC"
+    return 0
+  fi
+  if [[ -n "${SKILL_REPO_ROOT:-}" && -f "$SKILL_REPO_ROOT/docs/SETUP.md" ]]; then
+    echo "$SKILL_REPO_ROOT/docs/SETUP.md"
+    return 0
+  fi
+  return 1
+}
+
 skill_install_from_local() {
   local src_dir="$1"
-  local parent dest
+  local parent dest setup_src
   if [[ ! -d "$src_dir" || ! -f "$src_dir/SKILL.md" ]]; then
     echo "warning: skill source not found at $src_dir; skipping skill install" >&2
     return 0
   fi
+  setup_src="$(skill_setup_src || true)"
   while IFS= read -r parent; do
     dest="$parent/$SKILL_NAME"
     echo "==> Installing skill to $dest"
-    mkdir -p "$parent"
+    mkdir -p "$dest"
     rm -rf "$dest"
-    cp -R "$src_dir" "$dest"
+    mkdir -p "$dest"
+    cp "$src_dir/SKILL.md" "$dest/SKILL.md"
+    if [[ -n "$setup_src" ]]; then
+      cp "$setup_src" "$dest/SETUP.md"
+    fi
   done < <(skill_resolve_target_dirs)
 }
 
@@ -84,10 +101,10 @@ skill_install_from_remote() {
     dest="$parent/$SKILL_NAME"
     echo "==> Installing skill to $dest"
     mkdir -p "$dest"
-    for file in SKILL.md SETUP.md; do
-      curl -fsSL "https://raw.githubusercontent.com/${repo}/${tag}/skills/${SKILL_NAME}/${file}" \
-        -o "$dest/${file}"
-    done
+    curl -fsSL "https://raw.githubusercontent.com/${repo}/${tag}/skills/${SKILL_NAME}/SKILL.md" \
+      -o "$dest/SKILL.md"
+    curl -fsSL "https://raw.githubusercontent.com/${repo}/${tag}/docs/SETUP.md" \
+      -o "$dest/SETUP.md"
   done < <(skill_resolve_target_dirs)
 }
 

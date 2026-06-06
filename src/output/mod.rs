@@ -188,7 +188,7 @@ pub fn write_base64_file(output_dir: &Path, b64: &str, ext: &str) -> Result<Path
     let bytes = B64.decode(b64).context("decode base64 output")?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    let hash = format!("{:x}", hasher.finalize());
+    let hash = hex_lower(hasher.finalize());
     let ts = Local::now().format("%Y%m%d-%H%M%S");
     let path = output_dir.join(format!("{ts}-{hash}.{ext}"));
     fs::write(&path, bytes)?;
@@ -198,9 +198,20 @@ pub fn write_base64_file(output_dir: &Path, b64: &str, ext: &str) -> Result<Path
 fn unique_filename(url: &str, ext: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let hash = hex_lower(hasher.finalize());
     let ts = Local::now().format("%Y%m%d-%H%M%S");
     format!("{ts}-{hash}.{ext}")
+}
+
+fn hex_lower(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 pub fn retry<T, F>(max_retries: u32, mut f: F) -> Result<T>

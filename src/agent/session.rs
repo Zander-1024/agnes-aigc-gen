@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use pi_ai::Message;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::config::AppConfig;
@@ -117,7 +116,7 @@ fn first_user_message(messages: &[Message]) -> String {
 }
 
 fn new_id() -> String {
-    let suffix: u32 = rand::thread_rng().r#gen();
+    let suffix: u32 = rand::random();
     format!("{:x}-{suffix:08x}", pi_ai::now_ms())
 }
 

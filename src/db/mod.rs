@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rand::Rng;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -432,8 +431,9 @@ fn parse_json_col(raw: String) -> rusqlite::Result<Value> {
 
 fn new_asset_id() -> String {
     const CHARSET: &[u8] = b"0123456789abcdef";
-    let mut rng = rand::thread_rng();
-    (0..12).map(|_| CHARSET[rng.gen_range(0..16)] as char).collect()
+    (0..12)
+        .map(|_| CHARSET[rand::random_range(0..16usize)] as char)
+        .collect()
 }
 
 #[cfg(test)]

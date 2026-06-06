@@ -87,10 +87,10 @@ fn derive_key() -> Result<[u8; 32]> {
 
 pub fn encrypt_api_key(plain: &str) -> Result<String> {
     let key = derive_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).context("invalid cipher key")?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| anyhow::anyhow!("invalid cipher key"))?;
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    use rand::Rng;
+    rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plain.as_bytes())
@@ -107,7 +107,7 @@ pub fn decrypt_api_key(encoded: &str) -> Result<String> {
     }
     let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
     let key = derive_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).context("invalid cipher key")?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| anyhow::anyhow!("invalid cipher key"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
     let plain = cipher.decrypt(nonce, ciphertext).map_err(|_| {
         anyhow::anyhow!("decryption failed; re-run on this machine: agnes-aigc-gen config set api-key <KEY>")
@@ -118,7 +118,18 @@ pub fn decrypt_api_key(encoded: &str) -> Result<String> {
 fn hex_hash(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex_lower(hasher.finalize())
+}
+
+fn hex_lower(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 #[cfg(test)]

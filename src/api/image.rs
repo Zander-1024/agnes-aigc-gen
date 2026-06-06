@@ -182,8 +182,7 @@ pub fn resolve_image_seed(explicit: Option<u32>) -> Result<u32> {
         anyhow::ensure!(seed <= 999, "seed must be 0–999, got {seed}");
         return Ok(seed);
     }
-    use rand::Rng;
-    Ok(rand::thread_rng().gen_range(0..=999))
+    Ok(rand::random_range(0..=999))
 }
 
 #[cfg(test)]

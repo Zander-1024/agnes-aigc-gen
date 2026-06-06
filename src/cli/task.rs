@@ -1,15 +1,15 @@
 use anyhow::Result;
-use base64::Engine;
 use clap::{Args, Subcommand};
+use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Widget};
-use std::io::{self, IsTerminal, Write};
-use std::process::{Command, Stdio};
+use std::io::{self, IsTerminal};
 use std::time::Duration;
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
@@ -453,64 +453,7 @@ fn copy_to_clipboard_silent(text: &str) {
         return;
     }
 
-    if copy_with_system_clipboard(text) {
-        return;
-    }
-    copy_with_osc52(text);
-}
-
-fn copy_with_system_clipboard(text: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        return copy_with_command("pbcopy", &[], text);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if copy_with_command("wl-copy", &[], text) {
-            return true;
-        }
-        if copy_with_command("xclip", &["-selection", "clipboard"], text) {
-            return true;
-        }
-        if copy_with_command("xsel", &["--clipboard", "--input"], text) {
-            return true;
-        }
-        return false;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        return copy_with_command("clip", &[], text);
-    }
-
-    #[allow(unreachable_code)]
-    false
-}
-
-fn copy_with_command(program: &str, args: &[&str], text: &str) -> bool {
-    let mut child = match Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-
-    let Some(mut stdin) = child.stdin.take() else {
-        return false;
-    };
-    stdin.write_all(text.as_bytes()).is_ok()
-}
-
-fn copy_with_osc52(text: &str) {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let mut stdout = io::stdout();
-    let _ = write!(stdout, "\x1b]52;c;{encoded}\x07");
-    let _ = stdout.flush();
+    let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
 }
 
 fn run_show(task_ref: &str, output_format: String) -> Result<()> {

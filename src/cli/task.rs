@@ -1,9 +1,15 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Widget, Wrap};
+use std::io::{self, IsTerminal};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
 use crate::config::AppConfig;
@@ -66,7 +72,14 @@ fn run_list(limit: usize, output_format: String) -> Result<()> {
     let rows = refreshed_video_tasks(limit)?;
     match output_format.to_lowercase().as_str() {
         "json" => println!("{}", serde_json::to_string_pretty(&rows)?),
-        "plain" | "table" => print_task_list_table(&rows),
+        "plain" => {
+            if io::stdout().is_terminal() {
+                run_task_list_tui(rows)?;
+            } else {
+                print_task_list_table(&rows);
+            }
+        }
+        "table" => print_task_list_table(&rows),
         other => anyhow::bail!("unknown output format: {other}"),
     }
     Ok(())
@@ -93,10 +106,191 @@ fn print_task_list_table(rows: &[VideoTaskRecord]) {
         return;
     }
     println!("{}", render_task_list_table(rows));
-    let urls = render_task_result_urls(rows);
-    if !urls.is_empty() {
-        println!("\n{urls}");
+}
+
+struct TaskListUiState {
+    rows: Vec<VideoTaskRecord>,
+    table_state: TableState,
+}
+
+impl TaskListUiState {
+    fn new(rows: Vec<VideoTaskRecord>) -> Self {
+        let mut table_state = TableState::default();
+        if !rows.is_empty() {
+            table_state.select(Some(0));
+        }
+        Self { rows, table_state }
     }
+
+    fn selected_index(&self) -> Option<usize> {
+        self.table_state.selected().filter(|index| *index < self.rows.len())
+    }
+
+    fn selected_row(&self) -> Option<&VideoTaskRecord> {
+        self.selected_index().and_then(|index| self.rows.get(index))
+    }
+
+    fn selected_uri(&self) -> Option<&str> {
+        self.selected_row()
+            .and_then(|row| row.uri.as_deref())
+            .filter(|uri| !uri.trim().is_empty())
+    }
+
+    fn select_next(&mut self) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let next = self
+            .selected_index()
+            .map_or(0, |index| index.saturating_add(1).min(self.rows.len() - 1));
+        self.table_state.select(Some(next));
+    }
+
+    fn select_previous(&mut self) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let previous = self.selected_index().map_or(0, |index| index.saturating_sub(1));
+        self.table_state.select(Some(previous));
+    }
+
+    fn select_first(&mut self) {
+        if !self.rows.is_empty() {
+            self.table_state.select(Some(0));
+        }
+    }
+
+    fn select_last(&mut self) {
+        if !self.rows.is_empty() {
+            self.table_state.select(Some(self.rows.len() - 1));
+        }
+    }
+}
+
+fn run_task_list_tui(rows: Vec<VideoTaskRecord>) -> Result<()> {
+    if rows.is_empty() {
+        println!("No video tasks recorded.");
+        return Ok(());
+    }
+
+    let mut terminal = ratatui::try_init()?;
+    let result = run_task_list_app(&mut terminal, rows);
+    ratatui::restore();
+    result
+}
+
+fn run_task_list_app(terminal: &mut DefaultTerminal, rows: Vec<VideoTaskRecord>) -> Result<()> {
+    let mut state = TaskListUiState::new(rows);
+    loop {
+        terminal.draw(|frame| render_task_list_ui(frame, &mut state))?;
+        if event::poll(Duration::from_millis(120))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            if handle_task_list_key(key.code, key.modifiers, &mut state) {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_task_list_key(key: KeyCode, modifiers: KeyModifiers, state: &mut TaskListUiState) -> bool {
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') => true,
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => true,
+        KeyCode::Up => {
+            state.select_previous();
+            false
+        }
+        KeyCode::Down => {
+            state.select_next();
+            false
+        }
+        KeyCode::Home => {
+            state.select_first();
+            false
+        }
+        KeyCode::End => {
+            state.select_last();
+            false
+        }
+        KeyCode::PageUp => {
+            for _ in 0..10 {
+                state.select_previous();
+            }
+            false
+        }
+        KeyCode::PageDown => {
+            for _ in 0..10 {
+                state.select_next();
+            }
+            false
+        }
+        KeyCode::Enter => {
+            if let Some(uri) = state.selected_uri() {
+                open_uri_silent(uri);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(1)])
+        .split(area);
+
+    let table = task_table(&state.rows)
+        .block(Block::default().title("Video Tasks").borders(Borders::ALL))
+        .highlight_symbol(">> ")
+        .row_highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_stateful_widget(table, chunks[0], &mut state.table_state);
+
+    let help = Paragraph::new("Up/Down select  Enter open  Home/End jump  q/Esc quit");
+    frame.render_widget(help, chunks[1]);
+    render_selected_task_popup(frame, area, state);
+}
+
+fn render_selected_task_popup(frame: &mut ratatui::Frame, area: Rect, state: &TaskListUiState) {
+    let popup = task_popup_rect(area);
+    let title = state
+        .selected_row()
+        .map(|row| format!(" Task #{} Result ", row.id))
+        .unwrap_or_else(|| " Task Result ".to_string());
+    let lines = selected_task_popup_lines(state);
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(Clear, popup);
+    frame.render_widget(paragraph, popup);
+}
+
+fn selected_task_popup_lines(state: &TaskListUiState) -> Vec<Line<'static>> {
+    if let Some(uri) = state.selected_uri() {
+        vec![Line::from(uri.to_string()), Line::from(""), Line::from("Enter opens this URL.")]
+    } else {
+        vec![Line::from("No result URL yet."), Line::from("Refresh later with task list or task show <id>.")]
+    }
+}
+
+fn task_popup_rect(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(4).clamp(20, 110).min(area.width);
+    let height = area.height.saturating_sub(4).clamp(5, 8).min(area.height);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height + 2);
+    Rect::new(x, y, width, height)
 }
 
 fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
@@ -111,6 +305,13 @@ fn render_task_list_table_with_width(rows: &[VideoTaskRecord], width: u16) -> St
     let area = Rect::new(0, 0, width, height);
     let mut buffer = Buffer::empty(area);
 
+    let table = task_table(rows).block(Block::default().title("Video Tasks").borders(Borders::ALL));
+
+    table.render(area, &mut buffer);
+    buffer_to_string(&buffer)
+}
+
+fn task_table(rows: &[VideoTaskRecord]) -> Table<'static> {
     let header = Row::new([
         Cell::from("ID"),
         Cell::from("QUERY ID"),
@@ -123,9 +324,8 @@ fn render_task_list_table_with_width(rows: &[VideoTaskRecord], width: u16) -> St
     .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     .height(1);
 
-    let table_rows = rows.iter().map(task_table_row);
-    let table = Table::new(
-        table_rows,
+    Table::new(
+        rows.iter().map(task_table_row),
         [
             Constraint::Length(5),
             Constraint::Length(28),
@@ -136,12 +336,8 @@ fn render_task_list_table_with_width(rows: &[VideoTaskRecord], width: u16) -> St
             Constraint::Min(20),
         ],
     )
-    .block(Block::default().title("Video Tasks").borders(Borders::ALL))
     .header(header)
-    .column_spacing(1);
-
-    table.render(area, &mut buffer);
-    buffer_to_string(&buffer)
+    .column_spacing(1)
 }
 
 fn task_table_row(row: &VideoTaskRecord) -> Row<'static> {
@@ -180,18 +376,6 @@ fn buffer_to_string(buffer: &Buffer) -> String {
     out
 }
 
-fn render_task_result_urls(rows: &[VideoTaskRecord]) -> String {
-    let mut out = String::new();
-    for row in rows.iter().filter(|row| row.uri.is_some()) {
-        if out.is_empty() {
-            out.push_str("Result URLs:");
-        }
-        out.push('\n');
-        out.push_str(&format!("  #{} {}", row.id, row.uri.as_deref().unwrap_or_default()));
-    }
-    out
-}
-
 fn truncate_display(text: &str, max_chars: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= max_chars {
@@ -201,6 +385,49 @@ fn truncate_display(text: &str, max_chars: usize) -> String {
         return "...".chars().take(max_chars).collect();
     }
     format!("{}...", chars.into_iter().take(max_chars - 3).collect::<String>())
+}
+
+fn open_uri_silent(uri: &str) {
+    if uri.trim().is_empty() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = spawn_open_command("open", &[uri]);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if spawn_open_command("xdg-open", &[uri]) {
+            return;
+        }
+        if spawn_open_command("gio", &["open", uri]) {
+            return;
+        }
+        if spawn_open_command("gnome-open", &[uri]) {
+            return;
+        }
+        if spawn_open_command("kde-open", &[uri]) {
+            return;
+        }
+        let _ = spawn_open_command("wslview", &[uri]);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = spawn_open_command("cmd", &["/C", "start", "", uri]);
+    }
+}
+
+fn spawn_open_command(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 fn run_show(task_ref: &str, output_format: String) -> Result<()> {
@@ -298,11 +525,43 @@ mod tests {
     }
 
     #[test]
-    fn task_result_urls_render_full_links() {
-        let rows = vec![sample_task()];
-        let urls = render_task_result_urls(&rows);
+    fn task_list_state_tracks_selected_row() {
+        let mut second = sample_task();
+        second.id = 8;
+        second.task_id = "video_def".into();
+        second.uri = None;
 
-        assert_eq!(urls, "Result URLs:\n  #7 https://example.com/video.mp4");
+        let mut state = TaskListUiState::new(vec![sample_task(), second]);
+
+        assert_eq!(state.selected_row().unwrap().id, 7);
+        assert_eq!(state.selected_uri(), Some("https://example.com/video.mp4"));
+
+        state.select_next();
+        assert_eq!(state.selected_row().unwrap().id, 8);
+        assert_eq!(state.selected_uri(), None);
+
+        state.select_previous();
+        assert_eq!(state.selected_row().unwrap().id, 7);
+    }
+
+    #[test]
+    fn task_list_enter_without_uri_stays_in_ui() {
+        let mut row = sample_task();
+        row.uri = None;
+        let mut state = TaskListUiState::new(vec![row]);
+
+        assert!(!handle_task_list_key(KeyCode::Enter, KeyModifiers::empty(), &mut state));
+    }
+
+    #[test]
+    fn task_popup_rect_stays_inside_area() {
+        let area = Rect::new(0, 0, 12, 6);
+        let popup = task_popup_rect(area);
+
+        assert!(popup.width <= area.width);
+        assert!(popup.height <= area.height);
+        assert!(popup.x + popup.width <= area.x + area.width);
+        assert!(popup.y + popup.height <= area.y + area.height);
     }
 
     fn sample_task() -> VideoTaskRecord {

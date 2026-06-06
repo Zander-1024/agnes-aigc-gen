@@ -179,7 +179,7 @@ agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
 agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
 agnes-aigc-gen video --task-id video_xxxxxxxx
 agnes-aigc-gen video -p "Ocean sunset" --async   # returns local id + vendor query id
-agnes-aigc-gen task list                         # refreshes in-progress; shows ID column
+agnes-aigc-gen task list                         # interactive TUI in a terminal
 agnes-aigc-gen task list --output-format json     # agent-friendly task records
 agnes-aigc-gen task show 3                        # local id (or vendor query id)
 agnes-aigc-gen task wait 3                         # poll until done
@@ -215,7 +215,8 @@ Wait for command to finish; queued tasks are normal. Use `--async` to submit wit
 | Command | Purpose |
 |---------|---------|
 | `video --async` | Submit task; JSON includes local `id` + vendor query id as `task_id` |
-| `task list [-n N]` | Last N tasks (refreshes **processing** from API); table columns: ID, QUERY ID, PHASE, STATUS, PROGRESS, PROMPT, URI, followed by full Result URLs |
+| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive in a TTY: Up/Down selects, popup shows the full result URL, Enter silently opens it, `q`/Esc exits |
+| `task list --output-format table` | Static table for non-interactive display; columns: ID, QUERY ID, PHASE, STATUS, PROGRESS, PROMPT, URI |
 | `task list --output-format json` | Agent-friendly JSON array, including `progress` |
 | `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor query id |
 | `task wait <ref>` | Same as `video --task-id` (block until complete) |

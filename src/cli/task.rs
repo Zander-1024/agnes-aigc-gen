@@ -93,6 +93,10 @@ fn print_task_list_table(rows: &[VideoTaskRecord]) {
         return;
     }
     println!("{}", render_task_list_table(rows));
+    let urls = render_task_result_urls(rows);
+    if !urls.is_empty() {
+        println!("\n{urls}");
+    }
 }
 
 fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
@@ -172,6 +176,18 @@ fn buffer_to_string(buffer: &Buffer) -> String {
         if y + 1 < height {
             out.push('\n');
         }
+    }
+    out
+}
+
+fn render_task_result_urls(rows: &[VideoTaskRecord]) -> String {
+    let mut out = String::new();
+    for row in rows.iter().filter(|row| row.uri.is_some()) {
+        if out.is_empty() {
+            out.push_str("Result URLs:");
+        }
+        out.push('\n');
+        out.push_str(&format!("  #{} {}", row.id, row.uri.as_deref().unwrap_or_default()));
     }
     out
 }
@@ -279,6 +295,14 @@ mod tests {
         let value = serde_json::to_value(&rows).unwrap();
 
         assert_eq!(value[0]["progress"], 42);
+    }
+
+    #[test]
+    fn task_result_urls_render_full_links() {
+        let rows = vec![sample_task()];
+        let urls = render_task_result_urls(&rows);
+
+        assert_eq!(urls, "Result URLs:\n  #7 https://example.com/video.mp4");
     }
 
     fn sample_task() -> VideoTaskRecord {

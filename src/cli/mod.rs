@@ -2,6 +2,7 @@ mod chat;
 mod dashboard;
 mod history;
 mod image;
+mod list_tui;
 mod task;
 mod video;
 

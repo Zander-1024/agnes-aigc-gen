@@ -1,18 +1,19 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use crossterm::clipboard::CopyToClipboard;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Widget};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState, Widget};
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
+use crate::cli::list_tui::{
+    LIST_HELP_TEXT, buffer_to_string, copy_to_clipboard_silent, detail_field_tabs_line, detail_value_display,
+    parse_list_key, render_detail_panel, render_help_line, truncate_display,
+};
 use crate::config::AppConfig;
 use crate::db::{Database, VideoTaskRecord};
 use crate::output::OutputFormat;
@@ -141,6 +142,10 @@ impl TaskListUiState {
         }
     }
 
+    fn selected_detail_display_value(&self) -> String {
+        detail_value_display(self.selected_detail_value().unwrap_or("-"))
+    }
+
     fn select_next(&mut self) {
         if self.rows.is_empty() {
             return;
@@ -198,6 +203,14 @@ impl TaskDetailField {
         }
     }
 
+    fn index(self) -> usize {
+        match self {
+            Self::QueryId => 0,
+            Self::Prompt => 1,
+            Self::Uri => 2,
+        }
+    }
+
     fn next(self) -> Self {
         match self {
             Self::QueryId => Self::Prompt,
@@ -245,61 +258,56 @@ fn run_task_list_app(terminal: &mut DefaultTerminal, rows: Vec<VideoTaskRecord>)
     Ok(())
 }
 
-fn handle_task_list_key(key: KeyCode, modifiers: KeyModifiers, state: &mut TaskListUiState) -> bool {
-    match key {
-        KeyCode::Esc | KeyCode::Char('q') => true,
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => true,
-        KeyCode::Up => {
-            state.select_previous();
-            false
-        }
-        KeyCode::Down => {
-            state.select_next();
-            false
-        }
-        KeyCode::Home => {
-            state.select_first();
-            false
-        }
-        KeyCode::End => {
-            state.select_last();
-            false
-        }
-        KeyCode::PageUp => {
-            for _ in 0..10 {
-                state.select_previous();
-            }
-            false
-        }
-        KeyCode::PageDown => {
-            for _ in 0..10 {
-                state.select_next();
-            }
-            false
-        }
-        KeyCode::Left => {
-            state.select_previous_detail();
-            false
-        }
-        KeyCode::Right => {
-            state.select_next_detail();
-            false
-        }
-        KeyCode::Enter => {
-            if let Some(value) = state.selected_detail_value() {
-                copy_to_clipboard_silent(value);
-            }
-            false
-        }
-        _ => false,
+fn handle_task_list_key(
+    key: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+    state: &mut TaskListUiState,
+) -> bool {
+    let action = parse_list_key(key, modifiers);
+    if action.quit {
+        return true;
     }
+    if action.row_up {
+        state.select_previous();
+    }
+    if action.row_down {
+        state.select_next();
+    }
+    if action.row_first {
+        state.select_first();
+    }
+    if action.row_last {
+        state.select_last();
+    }
+    if action.row_page_up {
+        for _ in 0..10 {
+            state.select_previous();
+        }
+    }
+    if action.row_page_down {
+        for _ in 0..10 {
+            state.select_next();
+        }
+    }
+    if action.field_previous {
+        state.select_previous_detail();
+    }
+    if action.field_next {
+        state.select_next_detail();
+    }
+    if action.copy
+        && let Some(value) = state.selected_detail_value()
+    {
+        copy_to_clipboard_silent(value);
+    }
+    false
 }
 
 fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(1), Constraint::Length(1)])
+        .constraints([Constraint::Min(6), Constraint::Length(4), Constraint::Length(1)])
         .split(area);
 
     let table = task_table(&state.rows)
@@ -313,38 +321,12 @@ fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) 
         );
     frame.render_stateful_widget(table, chunks[0], &mut state.table_state);
 
-    let detail =
-        Paragraph::new(selected_task_detail_line(state)).style(Style::default().fg(Color::White).bg(Color::DarkGray));
-    frame.render_widget(detail, chunks[1]);
+    let labels: Vec<&str> = TaskDetailField::ALL.iter().map(|field| field.label()).collect();
+    let tabs = detail_field_tabs_line(&labels, state.detail_field.index());
+    let value = state.selected_detail_display_value();
+    render_detail_panel(frame, chunks[1], tabs, value);
 
-    let help = Paragraph::new("Up/Down row  Left/Right detail  Enter copy  Home/End jump  q/Esc quit");
-    frame.render_widget(help, chunks[2]);
-}
-
-fn selected_task_detail_line(state: &TaskListUiState) -> Line<'static> {
-    let mut spans = Vec::new();
-    for field in TaskDetailField::ALL {
-        if !spans.is_empty() {
-            spans.push(Span::raw(" "));
-        }
-        let style = if field == state.detail_field {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        spans.push(Span::styled(format!(" {} ", field.label()), style));
-    }
-
-    spans.push(Span::raw("  |  "));
-    spans.push(Span::styled(
-        format!("{}: ", state.detail_field.label()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    spans.push(Span::raw(state.selected_detail_value().unwrap_or("-").to_string()));
-    Line::from(spans)
+    render_help_line(frame, chunks[2], LIST_HELP_TEXT);
 }
 
 fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
@@ -413,47 +395,11 @@ fn format_progress(progress: Option<i32>) -> String {
     }
 }
 
-fn buffer_to_string(buffer: &Buffer) -> String {
-    let width = buffer.area.width;
-    let height = buffer.area.height;
-    let mut out = String::new();
-    for y in 0..height {
-        let mut line = String::new();
-        for x in 0..width {
-            line.push_str(buffer[(x, y)].symbol());
-        }
-        out.push_str(line.trim_end());
-        if y + 1 < height {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-fn truncate_display(text: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars <= 3 {
-        return "...".chars().take(max_chars).collect();
-    }
-    format!("{}...", chars.into_iter().take(max_chars - 3).collect::<String>())
-}
-
 fn non_empty_value(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() { None } else { Some(trimmed) }
     })
-}
-
-fn copy_to_clipboard_silent(text: &str) {
-    if text.trim().is_empty() {
-        return;
-    }
-
-    let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
 }
 
 fn run_show(task_ref: &str, output_format: String) -> Result<()> {
@@ -513,16 +459,6 @@ fn parse_output_format(s: &str) -> Result<OutputFormat> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn truncate_display_short() {
-        assert_eq!(truncate_display("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_display_long() {
-        assert_eq!(truncate_display("abcdefghijk", 10), "abcdefg...");
-    }
 
     #[test]
     fn progress_formats_percent_or_dash() {
@@ -590,15 +526,35 @@ mod tests {
     }
 
     #[test]
-    fn task_detail_line_is_single_line() {
-        let mut state = TaskListUiState::new(vec![sample_task()]);
-        state.detail_field = TaskDetailField::Uri;
-
-        let line = selected_task_detail_line(&state);
+    fn task_detail_tabs_exclude_value() {
+        let state = TaskListUiState::new(vec![sample_task()]);
+        let labels: Vec<&str> = TaskDetailField::ALL.iter().map(|field| field.label()).collect();
+        let line = detail_field_tabs_line(&labels, state.detail_field.index());
         let text = line.to_string();
 
-        assert!(text.contains("URI: https://example.com/video.mp4"));
-        assert!(!text.contains('\n'));
+        assert!(text.contains("QUERY ID"));
+        assert!(!text.contains("video_abc"));
+        assert!(!text.contains("PROMPT:"));
+    }
+
+    #[test]
+    fn task_detail_display_truncates_long_prompt() {
+        let mut task = sample_task();
+        task.prompt = Some("x".repeat(250));
+
+        let mut state = TaskListUiState::new(vec![task]);
+        state.detail_field = TaskDetailField::Prompt;
+
+        let displayed = state.selected_detail_display_value();
+        assert_eq!(
+            displayed.chars().count(),
+            crate::cli::list_tui::DETAIL_DISPLAY_MAX_CHARS
+        );
+        assert!(displayed.ends_with("..."));
+
+        let full = state.selected_detail_value().unwrap();
+        assert_eq!(full.chars().count(), 250);
+        assert_ne!(full, displayed.as_str());
     }
 
     fn sample_task() -> VideoTaskRecord {

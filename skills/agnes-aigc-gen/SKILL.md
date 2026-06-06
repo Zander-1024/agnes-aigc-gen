@@ -215,7 +215,7 @@ Wait for command to finish; queued tasks are normal. Use `--async` to submit wit
 | Command | Purpose |
 |---------|---------|
 | `video --async` | Submit task; JSON includes local `id` + vendor query id as `task_id` |
-| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive in a TTY: Up/Down selects rows, Left/Right selects QUERY ID/PROMPT/URI detail, Enter copies the selected detail, `q`/Esc exits |
+| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive TTY: table + **Detail** box (top row: Left/Right cycles QUERY ID/PROMPT/URI tabs; bottom row: value only, max 200 chars displayed); Enter copies **full** selected field; `q`/Esc exits |
 | `task list --output-format table` | Static table for non-interactive display; columns: ID, QUERY ID, PHASE, STATUS, PROGRESS, PROMPT, URI |
 | `task list --output-format json` | Agent-friendly JSON array, including `progress` |
 | `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor query id |
@@ -256,10 +256,20 @@ Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Match ra
 ## Assets & history
 
 ```bash
-agnes-aigc-gen asset list
+agnes-aigc-gen asset list                         # interactive TUI in a terminal
+agnes-aigc-gen asset list --output-format json
+agnes-aigc-gen asset list --output-format table
 agnes-aigc-gen asset show asset://c8d4eb63a84b
 agnes-aigc-gen history list
 ```
+
+| Command | Purpose |
+|---------|---------|
+| `asset list [-n N]` | Last N assets; interactive TTY: table + **Detail** box (Left/Right cycles ASSET URI/REMOTE URL/ID; bottom shows value, max 200 chars); Enter copies **full** field |
+| `asset list --output-format table` | Static bordered table |
+| `asset list --output-format json` | Agent-friendly JSON array |
+| `asset show <id>` | Full asset record JSON (`asset://id` or bare id) |
+| `history list` | Plain-text generation audit trail |
 
 ---
 

@@ -1,9 +1,13 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table, Widget};
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
 use crate::config::AppConfig;
-use crate::db::Database;
+use crate::db::{Database, VideoTaskRecord};
 use crate::output::OutputFormat;
 
 #[derive(Args)]
@@ -18,6 +22,8 @@ pub enum TaskAction {
     List {
         #[arg(short = 'n', long = "limit", default_value_t = 10)]
         limit: usize,
+        #[arg(long = "output-format", default_value = "plain")]
+        output_format: String,
     },
     /// Query a video task once (refresh from API, update local record)
     Show {
@@ -43,7 +49,7 @@ pub enum TaskAction {
 
 pub fn run(cmd: TaskCmd) -> Result<()> {
     match cmd.action {
-        TaskAction::List { limit } => run_list(limit),
+        TaskAction::List { limit, output_format } => run_list(limit, output_format),
         TaskAction::Show { task_ref, output_format } => run_show(&task_ref, output_format),
         TaskAction::Wait { task_ref, output_dir, save, retries, output_format } => {
             run_wait(task_ref, output_dir, save, retries, output_format)
@@ -56,13 +62,19 @@ pub fn resolve_task_ref(reference: &str) -> Result<String> {
     Database::open()?.resolve_video_task_ref(reference)
 }
 
-fn run_list(limit: usize) -> Result<()> {
+fn run_list(limit: usize, output_format: String) -> Result<()> {
+    let rows = refreshed_video_tasks(limit)?;
+    match output_format.to_lowercase().as_str() {
+        "json" => println!("{}", serde_json::to_string_pretty(&rows)?),
+        "plain" | "table" => print_task_list_table(&rows),
+        other => anyhow::bail!("unknown output format: {other}"),
+    }
+    Ok(())
+}
+
+fn refreshed_video_tasks(limit: usize) -> Result<Vec<VideoTaskRecord>> {
     let db = Database::open()?;
     let pending = db.list_video_tasks(limit)?;
-    if pending.is_empty() {
-        println!("No video tasks recorded.");
-        return Ok(());
-    }
 
     if let Ok(api) = ApiClient::from_config(AppConfig::load()?) {
         for row in pending.iter().filter(|r| r.phase == "processing") {
@@ -72,15 +84,96 @@ fn run_list(limit: usize) -> Result<()> {
         }
     }
 
-    let rows = db.list_video_tasks(limit)?;
-    println!("{:<4} {:<10} {:<11} {:<10} URI", "ID", "TASK_ID", "PHASE", "PROMPT");
-    for row in rows {
-        let prompt = truncate_display(&row.prompt.unwrap_or_default(), 10);
-        let task_id = truncate_display(&row.task_id, 10);
-        let uri = row.uri.unwrap_or_else(|| "-".into());
-        println!("{:<4} {:<10} {:<11} {:<10} {}", row.id, task_id, row.phase, prompt, uri);
+    db.list_video_tasks(limit)
+}
+
+fn print_task_list_table(rows: &[VideoTaskRecord]) {
+    if rows.is_empty() {
+        println!("No video tasks recorded.");
+        return;
     }
-    Ok(())
+    println!("{}", render_task_list_table(rows));
+}
+
+fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
+    let width = crossterm::terminal::size()
+        .map(|(width, _)| width.clamp(120, 180))
+        .unwrap_or(140);
+    render_task_list_table_with_width(rows, width)
+}
+
+fn render_task_list_table_with_width(rows: &[VideoTaskRecord], width: u16) -> String {
+    let height = rows.len().saturating_add(3).min(u16::MAX as usize) as u16;
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+
+    let header = Row::new([
+        Cell::from("ID"),
+        Cell::from("QUERY ID"),
+        Cell::from("PHASE"),
+        Cell::from("STATUS"),
+        Cell::from("PROGRESS"),
+        Cell::from("PROMPT"),
+        Cell::from("URI"),
+    ])
+    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+    .height(1);
+
+    let table_rows = rows.iter().map(task_table_row);
+    let table = Table::new(
+        table_rows,
+        [
+            Constraint::Length(5),
+            Constraint::Length(28),
+            Constraint::Length(11),
+            Constraint::Length(12),
+            Constraint::Length(9),
+            Constraint::Length(24),
+            Constraint::Min(20),
+        ],
+    )
+    .block(Block::default().title("Video Tasks").borders(Borders::ALL))
+    .header(header)
+    .column_spacing(1);
+
+    table.render(area, &mut buffer);
+    buffer_to_string(&buffer)
+}
+
+fn task_table_row(row: &VideoTaskRecord) -> Row<'static> {
+    Row::new([
+        Cell::from(row.id.to_string()),
+        Cell::from(truncate_display(&row.task_id, 26)),
+        Cell::from(row.phase.clone()),
+        Cell::from(row.status.clone()),
+        Cell::from(format_progress(row.progress)),
+        Cell::from(truncate_display(&row.prompt.clone().unwrap_or_default(), 22)),
+        Cell::from(truncate_display(row.uri.as_deref().unwrap_or("-"), 64)),
+    ])
+}
+
+fn format_progress(progress: Option<i32>) -> String {
+    match progress {
+        Some(progress) => format!("{}%", progress.clamp(0, 100)),
+        None => "-".to_string(),
+    }
+}
+
+fn buffer_to_string(buffer: &Buffer) -> String {
+    let width = buffer.area.width;
+    let height = buffer.area.height;
+    let mut out = String::new();
+    for y in 0..height {
+        let mut line = String::new();
+        for x in 0..width {
+            line.push_str(buffer[(x, y)].symbol());
+        }
+        out.push_str(line.trim_end());
+        if y + 1 < height {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn truncate_display(text: &str, max_chars: usize) -> String {
@@ -160,5 +253,48 @@ mod tests {
     #[test]
     fn truncate_display_long() {
         assert_eq!(truncate_display("abcdefghijk", 10), "abcdefg...");
+    }
+
+    #[test]
+    fn progress_formats_percent_or_dash() {
+        assert_eq!(format_progress(Some(42)), "42%");
+        assert_eq!(format_progress(Some(120)), "100%");
+        assert_eq!(format_progress(None), "-");
+    }
+
+    #[test]
+    fn task_table_renders_progress_column() {
+        let rows = vec![sample_task()];
+        let table = render_task_list_table_with_width(&rows, 120);
+
+        assert!(table.contains("Video Tasks"));
+        assert!(table.contains("PROGRESS"));
+        assert!(table.contains("42%"));
+        assert!(table.contains("video_abc"));
+    }
+
+    #[test]
+    fn task_list_json_includes_progress() {
+        let rows = vec![sample_task()];
+        let value = serde_json::to_value(&rows).unwrap();
+
+        assert_eq!(value[0]["progress"], 42);
+    }
+
+    fn sample_task() -> VideoTaskRecord {
+        VideoTaskRecord {
+            id: 7,
+            task_id: "video_abc".into(),
+            status: "in_progress".into(),
+            phase: "processing".into(),
+            prompt: Some("A red sphere rolls across a table".into()),
+            input_json: None,
+            progress: Some(42),
+            uri: Some("https://example.com/video.mp4".into()),
+            asset_uri: None,
+            error: None,
+            created_at: "2026-06-06T00:00:00Z".into(),
+            updated_at: "2026-06-06T00:01:00Z".into(),
+        }
     }
 }

@@ -215,7 +215,7 @@ Wait for command to finish; queued tasks are normal. Use `--async` to submit wit
 | Command | Purpose |
 |---------|---------|
 | `video --async` | Submit task; JSON includes local `id` + vendor query id as `task_id` |
-| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive in a TTY: Up/Down selects, popup shows the full result URL, Enter silently opens it, `q`/Esc exits |
+| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive in a TTY: Up/Down selects rows, Left/Right selects QUERY ID/PROMPT/URI detail, Enter copies the selected detail, `q`/Esc exits |
 | `task list --output-format table` | Static table for non-interactive display; columns: ID, QUERY ID, PHASE, STATUS, PROGRESS, PROMPT, URI |
 | `task list --output-format json` | Agent-friendly JSON array, including `progress` |
 | `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor query id |

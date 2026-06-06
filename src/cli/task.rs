@@ -1,13 +1,14 @@
 use anyhow::Result;
+use base64::Engine;
 use clap::{Args, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Widget, Wrap};
-use std::io::{self, IsTerminal};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Widget};
+use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -111,6 +112,7 @@ fn print_task_list_table(rows: &[VideoTaskRecord]) {
 struct TaskListUiState {
     rows: Vec<VideoTaskRecord>,
     table_state: TableState,
+    detail_field: TaskDetailField,
 }
 
 impl TaskListUiState {
@@ -119,7 +121,7 @@ impl TaskListUiState {
         if !rows.is_empty() {
             table_state.select(Some(0));
         }
-        Self { rows, table_state }
+        Self { rows, table_state, detail_field: TaskDetailField::QueryId }
     }
 
     fn selected_index(&self) -> Option<usize> {
@@ -130,10 +132,13 @@ impl TaskListUiState {
         self.selected_index().and_then(|index| self.rows.get(index))
     }
 
-    fn selected_uri(&self) -> Option<&str> {
-        self.selected_row()
-            .and_then(|row| row.uri.as_deref())
-            .filter(|uri| !uri.trim().is_empty())
+    fn selected_detail_value(&self) -> Option<&str> {
+        let row = self.selected_row()?;
+        match self.detail_field {
+            TaskDetailField::QueryId => non_empty_value(Some(row.task_id.as_str())),
+            TaskDetailField::Prompt => non_empty_value(row.prompt.as_deref()),
+            TaskDetailField::Uri => non_empty_value(row.uri.as_deref()),
+        }
     }
 
     fn select_next(&mut self) {
@@ -163,6 +168,49 @@ impl TaskListUiState {
     fn select_last(&mut self) {
         if !self.rows.is_empty() {
             self.table_state.select(Some(self.rows.len() - 1));
+        }
+    }
+
+    fn select_next_detail(&mut self) {
+        self.detail_field = self.detail_field.next();
+    }
+
+    fn select_previous_detail(&mut self) {
+        self.detail_field = self.detail_field.previous();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskDetailField {
+    QueryId,
+    Prompt,
+    Uri,
+}
+
+impl TaskDetailField {
+    const ALL: [Self; 3] = [Self::QueryId, Self::Prompt, Self::Uri];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::QueryId => "QUERY ID",
+            Self::Prompt => "PROMPT",
+            Self::Uri => "URI",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::QueryId => Self::Prompt,
+            Self::Prompt => Self::Uri,
+            Self::Uri => Self::QueryId,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::QueryId => Self::Uri,
+            Self::Prompt => Self::QueryId,
+            Self::Uri => Self::Prompt,
         }
     }
 }
@@ -229,9 +277,17 @@ fn handle_task_list_key(key: KeyCode, modifiers: KeyModifiers, state: &mut TaskL
             }
             false
         }
+        KeyCode::Left => {
+            state.select_previous_detail();
+            false
+        }
+        KeyCode::Right => {
+            state.select_next_detail();
+            false
+        }
         KeyCode::Enter => {
-            if let Some(uri) = state.selected_uri() {
-                open_uri_silent(uri);
+            if let Some(value) = state.selected_detail_value() {
+                copy_to_clipboard_silent(value);
             }
             false
         }
@@ -243,7 +299,7 @@ fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) 
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(1)])
+        .constraints([Constraint::Min(8), Constraint::Length(1), Constraint::Length(1)])
         .split(area);
 
     let table = task_table(&state.rows)
@@ -257,40 +313,38 @@ fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) 
         );
     frame.render_stateful_widget(table, chunks[0], &mut state.table_state);
 
-    let help = Paragraph::new("Up/Down select  Enter open  Home/End jump  q/Esc quit");
-    frame.render_widget(help, chunks[1]);
-    render_selected_task_popup(frame, area, state);
+    let detail =
+        Paragraph::new(selected_task_detail_line(state)).style(Style::default().fg(Color::White).bg(Color::DarkGray));
+    frame.render_widget(detail, chunks[1]);
+
+    let help = Paragraph::new("Up/Down row  Left/Right detail  Enter copy  Home/End jump  q/Esc quit");
+    frame.render_widget(help, chunks[2]);
 }
 
-fn render_selected_task_popup(frame: &mut ratatui::Frame, area: Rect, state: &TaskListUiState) {
-    let popup = task_popup_rect(area);
-    let title = state
-        .selected_row()
-        .map(|row| format!(" Task #{} Result ", row.id))
-        .unwrap_or_else(|| " Task Result ".to_string());
-    let lines = selected_task_popup_lines(state);
-
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(Clear, popup);
-    frame.render_widget(paragraph, popup);
-}
-
-fn selected_task_popup_lines(state: &TaskListUiState) -> Vec<Line<'static>> {
-    if let Some(uri) = state.selected_uri() {
-        vec![Line::from(uri.to_string()), Line::from(""), Line::from("Enter opens this URL.")]
-    } else {
-        vec![Line::from("No result URL yet."), Line::from("Refresh later with task list or task show <id>.")]
+fn selected_task_detail_line(state: &TaskListUiState) -> Line<'static> {
+    let mut spans = Vec::new();
+    for field in TaskDetailField::ALL {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        let style = if field == state.detail_field {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        spans.push(Span::styled(format!(" {} ", field.label()), style));
     }
-}
 
-fn task_popup_rect(area: Rect) -> Rect {
-    let width = area.width.saturating_sub(4).clamp(20, 110).min(area.width);
-    let height = area.height.saturating_sub(4).clamp(5, 8).min(area.height);
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height + 2);
-    Rect::new(x, y, width, height)
+    spans.push(Span::raw("  |  "));
+    spans.push(Span::styled(
+        format!("{}: ", state.detail_field.label()),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(state.selected_detail_value().unwrap_or("-").to_string()));
+    Line::from(spans)
 }
 
 fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
@@ -387,47 +441,76 @@ fn truncate_display(text: &str, max_chars: usize) -> String {
     format!("{}...", chars.into_iter().take(max_chars - 3).collect::<String>())
 }
 
-fn open_uri_silent(uri: &str) {
-    if uri.trim().is_empty() {
+fn non_empty_value(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    })
+}
+
+fn copy_to_clipboard_silent(text: &str) {
+    if text.trim().is_empty() {
         return;
     }
 
+    if copy_with_system_clipboard(text) {
+        return;
+    }
+    copy_with_osc52(text);
+}
+
+fn copy_with_system_clipboard(text: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let _ = spawn_open_command("open", &[uri]);
+        return copy_with_command("pbcopy", &[], text);
     }
 
     #[cfg(target_os = "linux")]
     {
-        if spawn_open_command("xdg-open", &[uri]) {
-            return;
+        if copy_with_command("wl-copy", &[], text) {
+            return true;
         }
-        if spawn_open_command("gio", &["open", uri]) {
-            return;
+        if copy_with_command("xclip", &["-selection", "clipboard"], text) {
+            return true;
         }
-        if spawn_open_command("gnome-open", &[uri]) {
-            return;
+        if copy_with_command("xsel", &["--clipboard", "--input"], text) {
+            return true;
         }
-        if spawn_open_command("kde-open", &[uri]) {
-            return;
-        }
-        let _ = spawn_open_command("wslview", &[uri]);
+        return false;
     }
 
     #[cfg(target_os = "windows")]
     {
-        let _ = spawn_open_command("cmd", &["/C", "start", "", uri]);
+        return copy_with_command("clip", &[], text);
     }
+
+    #[allow(unreachable_code)]
+    false
 }
 
-fn spawn_open_command(program: &str, args: &[&str]) -> bool {
-    Command::new(program)
+fn copy_with_command(program: &str, args: &[&str], text: &str) -> bool {
+    let mut child = match Command::new(program)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .is_ok()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+
+    let Some(mut stdin) = child.stdin.take() else {
+        return false;
+    };
+    stdin.write_all(text.as_bytes()).is_ok()
+}
+
+fn copy_with_osc52(text: &str) {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let mut stdout = io::stdout();
+    let _ = write!(stdout, "\x1b]52;c;{encoded}\x07");
+    let _ = stdout.flush();
 }
 
 fn run_show(task_ref: &str, output_format: String) -> Result<()> {
@@ -534,34 +617,45 @@ mod tests {
         let mut state = TaskListUiState::new(vec![sample_task(), second]);
 
         assert_eq!(state.selected_row().unwrap().id, 7);
-        assert_eq!(state.selected_uri(), Some("https://example.com/video.mp4"));
+        assert_eq!(state.selected_detail_value(), Some("video_abc"));
 
         state.select_next();
         assert_eq!(state.selected_row().unwrap().id, 8);
-        assert_eq!(state.selected_uri(), None);
+        assert_eq!(state.selected_detail_value(), Some("video_def"));
 
         state.select_previous();
         assert_eq!(state.selected_row().unwrap().id, 7);
     }
 
     #[test]
-    fn task_list_enter_without_uri_stays_in_ui() {
-        let mut row = sample_task();
-        row.uri = None;
-        let mut state = TaskListUiState::new(vec![row]);
+    fn task_list_detail_field_cycles_copyable_fields() {
+        let mut state = TaskListUiState::new(vec![sample_task()]);
 
-        assert!(!handle_task_list_key(KeyCode::Enter, KeyModifiers::empty(), &mut state));
+        assert_eq!(state.detail_field, TaskDetailField::QueryId);
+        assert_eq!(state.selected_detail_value(), Some("video_abc"));
+
+        state.select_next_detail();
+        assert_eq!(state.detail_field, TaskDetailField::Prompt);
+        assert_eq!(state.selected_detail_value(), Some("A red sphere rolls across a table"));
+
+        state.select_next_detail();
+        assert_eq!(state.detail_field, TaskDetailField::Uri);
+        assert_eq!(state.selected_detail_value(), Some("https://example.com/video.mp4"));
+
+        state.select_next_detail();
+        assert_eq!(state.detail_field, TaskDetailField::QueryId);
     }
 
     #[test]
-    fn task_popup_rect_stays_inside_area() {
-        let area = Rect::new(0, 0, 12, 6);
-        let popup = task_popup_rect(area);
+    fn task_detail_line_is_single_line() {
+        let mut state = TaskListUiState::new(vec![sample_task()]);
+        state.detail_field = TaskDetailField::Uri;
 
-        assert!(popup.width <= area.width);
-        assert!(popup.height <= area.height);
-        assert!(popup.x + popup.width <= area.x + area.width);
-        assert!(popup.y + popup.height <= area.y + area.height);
+        let line = selected_task_detail_line(&state);
+        let text = line.to_string();
+
+        assert!(text.contains("URI: https://example.com/video.mp4"));
+        assert!(!text.contains('\n'));
     }
 
     fn sample_task() -> VideoTaskRecord {

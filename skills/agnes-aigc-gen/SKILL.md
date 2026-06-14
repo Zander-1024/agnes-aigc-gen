@@ -364,4 +364,20 @@ Video tool calls should use `agnes_submit_video`; it submits asynchronously and 
 
 ## Other commands
 
-`dashboard` (ratatui), `chat` (PI-based agent TUI). For non-interactive agents, prefer `image` / `video` with JSON stdout unless the task specifically needs the chat agent.
+### Dashboard (`agnes-aigc-gen dashboard`)
+
+Interactive ratatui UI for image/video generation, tasks, assets, and settings.
+
+| Page | Layout / keys |
+|------|------|
+| **Home** | ↑↓ / Enter / 1–7 shortcuts; **Video Tasks** shows `(N running)` when applicable; Status bar `[RUN N]` globally |
+| **Generate Image** | Left: **Prompt** (multiline). Right: **Parameters** (ratio, size, count, seed, save, output) + **References**. Tab = Text / Params / Media; ↑↓ in Params; ←→ ratio/count; `a`/`A`/`d` media; Ctrl+Enter submit; **Result** panel at bottom when done |
+| **Generate Video** | Left: **Prompt** + **Negative** (multiline). Right: **Parameters** + **Active/Recent tasks** (symbols, progress bars, 1s refresh when running) + **References**. `t` Tasks · `r` refresh · `g` jump to running · Async toggle; async stays on page with **Result (running)** panel until complete |
+| **Video Tasks** | Colored state icons + progress bars; title shows `(N running)`; auto-refresh 1s when running else 5s; `g` select running row |
+| **Assets** | List TUI; `v` send to video form; Enter copy field |
+| **Settings** | Edit config; `s` / Enter on Actions = save |
+| **Chat** | Exits dashboard → full agent chat TUI |
+
+Params lines show resolved **pixel size** (tier) and video **frame/timing** inline (no side preview panel).
+
+`chat` (PI-based agent TUI). For non-interactive agents, prefer `image` / `video` with JSON stdout unless the task specifically needs the chat agent.

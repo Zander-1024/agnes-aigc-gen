@@ -156,7 +156,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
             size: dims.size_string(),
             uri: String::new(),
             asset_uri: None,
-            generation_id: None,
+            generation_id: Some(record.id),
         });
     }
 

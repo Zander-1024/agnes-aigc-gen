@@ -89,6 +89,56 @@ fn supported_labels(presets: &HashMap<&'static str, Dimensions>) -> String {
     keys.join(", ")
 }
 
+/// One selectable aspect ratio with resolved pixel dimensions (for UI pickers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatioOption {
+    pub label: String,
+    pub dimensions: Dimensions,
+    pub tier: &'static str,
+}
+
+/// Catalog tier for future multi-resolution support (e.g. 2K).
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub struct RatioCatalog {
+    pub tier: &'static str,
+}
+
+pub const IMAGE_RESOLUTION_TIER: &str = "1K";
+pub const VIDEO_RESOLUTION_TIER: &str = "720p";
+
+fn presets_to_options(presets: &HashMap<&'static str, Dimensions>, tier: &'static str) -> Vec<RatioOption> {
+    let mut keys: Vec<_> = presets.keys().copied().collect();
+    keys.sort_unstable();
+    keys.into_iter()
+        .map(|label| RatioOption { label: label.to_string(), dimensions: presets[label], tier })
+        .collect()
+}
+
+/// Supported image aspect ratios with 1K-tier dimensions.
+pub fn image_ratio_options() -> Vec<RatioOption> {
+    presets_to_options(&IMAGE_RATIO_PRESETS, IMAGE_RESOLUTION_TIER)
+}
+
+/// Known video aspect ratios with 720p-tier dimensions.
+pub fn video_ratio_options() -> Vec<RatioOption> {
+    presets_to_options(&VIDEO_RATIO_PRESETS, VIDEO_RESOLUTION_TIER)
+}
+
+/// Maximum allowed duration in seconds at a given frame rate.
+pub fn video_max_duration_secs(frame_rate: u32) -> Result<f64> {
+    Ok(max_video_duration(frame_rate)? as f64)
+}
+
+/// Preview snapped frame count and actual duration for UI.
+pub fn video_timing_preview(duration_secs: f64, frame_rate: u32) -> Result<(u32, f64)> {
+    resolve_video_timing(duration_secs, frame_rate)
+}
+
+pub fn ratio_option_display(option: &RatioOption) -> String {
+    format!("{} · {}", option.label, option.dimensions.size_string())
+}
+
 /// Fixed image dimensions per supported aspect ratio.
 pub fn image_dimensions(ratio: &AspectRatio) -> Result<Dimensions> {
     lookup_preset(&IMAGE_RATIO_PRESETS, ratio).with_context(|| {
@@ -218,6 +268,24 @@ mod tests {
         assert_eq!(max_video_duration(24).unwrap(), 18);
         assert!(resolve_video_timing(18.0, 24).is_ok());
         assert!(resolve_video_timing(18.1, 24).is_err());
+    }
+
+    #[test]
+    fn ratio_option_catalog_lists_image_presets() {
+        let options = image_ratio_options();
+        assert_eq!(options.len(), 5);
+        assert!(
+            options
+                .iter()
+                .any(|o| o.label == "1:1" && o.tier == IMAGE_RESOLUTION_TIER)
+        );
+    }
+
+    #[test]
+    fn video_timing_preview_api() {
+        let (frames, actual) = video_timing_preview(5.0, 24).unwrap();
+        assert!(frames >= 9);
+        assert!(actual > 0.0);
     }
 
     #[test]

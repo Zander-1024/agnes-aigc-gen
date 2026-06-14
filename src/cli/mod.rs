@@ -2,7 +2,7 @@ mod chat;
 mod dashboard;
 mod history;
 mod image;
-mod list_tui;
+pub mod list_tui;
 mod self_cmd;
 mod task;
 mod version;

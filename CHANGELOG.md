@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-06
+
+### Added
+
+- Full ratatui **dashboard** for image/video generation, tasks, assets, and settings
+- Scheme B layout: multiline prompt, inline params, references, bottom Output panel
+- Async video tasks with in-page progress, task strip, and `[RUN N]` on Tasks page
+- Tab cycles Prompt / Params / References / Output; F5 submit
+
+### Changed
+
+- Replaced legacy `ui/app.rs` stub dashboard with `ui/dashboard/` module
+- Video async submissions return `generation_id` from local task record
+- Status bar on generate pages shows brief text only (progress in Output panel)
+
 ## [0.4.0] - 2026-06-06
 
 ### Added

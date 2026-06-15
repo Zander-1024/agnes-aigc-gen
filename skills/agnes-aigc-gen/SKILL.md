@@ -99,6 +99,19 @@ Do **not** assume `~/.config` on macOS.
 | `generations.db` | SQLite: `asset://` → remote URL, generation history |
 | `chat_sessions/*.json` | Chat TUI transcripts for `/sessions` and `--resume` |
 
+### Agent sandbox & write permissions
+
+Every successful `image`, `video`, `video --async`, and related command **writes to `{config_dir}`** (SQLite `generations.db`, asset records, async video tasks). With `--save`, output also goes to `output_dir`. These paths are **outside the project workspace**.
+
+Some agent runtimes (e.g. Cursor sandbox) only allow writes inside the workspace. If a CLI call fails with permission denied, sandbox, or “cannot write to …” errors pointing at `{config_dir}` or `generations.db`:
+
+1. **Stop and tell the user** — the CLI needs write access to `{config_dir}`; ask them to grant it (disable sandbox, allow “all” permissions, or add `{config_dir}` to the agent’s allowed write paths).
+2. **Do not bypass** — do not relocate config/DB into the workspace, fake JSON output, skip the CLI, or use undocumented env overrides to dodge the restriction. Those break `asset://` chaining, task tracking, and history on this machine.
+
+Example user message:
+
+> `agnes-aigc-gen` writes state to `~/Library/Application Support/agnes-aigc-gen/` (macOS) or `~/.config/agnes-aigc-gen/` (Linux). This run was blocked by the agent sandbox. Please allow writes to that directory (or run with full permissions), then retry the same command.
+
 ### Image inputs (`-i` / `--input`)
 
 | Form | Image i2i | Video `-i` |
@@ -342,6 +355,7 @@ Video tool calls should use `agnes_submit_video`; it submits asynchronously and 
 
 | Error | Fix |
 |-------|-----|
+| Permission denied / sandbox blocked write to `{config_dir}` or `generations.db` | Ask user to grant write access to `{config_dir}` (see **Agent sandbox & write permissions**); do not workaround |
 | `API key not configured` | SETUP.md → `config set api-key` |
 | Decrypt failed | Re-set API key on this machine |
 | `invalid ratio` | Use supported ratio |

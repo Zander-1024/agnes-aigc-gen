@@ -4,7 +4,6 @@ use serde_json::json;
 use crate::api::ApiClient;
 use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::types::{ExtraBodyImage, ImageGenerationRequest, ImageGenerationResponse};
-use crate::logging;
 use crate::media::{classify_input, parse_image_inputs, resolve_for_api};
 use crate::output::{OutputFormat, download_with_retry, infer_ext_from_url, write_base64_file};
 use crate::ratio::{AspectRatio, ImageResolutionTier, validate_image_ratio};
@@ -74,13 +73,10 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<crate::outpu
     };
 
     let resp = api.post_json("images/generations", &body)?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        logging::log_response(status.as_u16(), &text);
-        bail!("image generation failed ({status}): {text}");
-    }
-    let parsed: ImageGenerationResponse = resp.json().context("parse image response")?;
+    let resp = ApiClient::ensure_success(resp, "image generation")?;
+    let parsed: ImageGenerationResponse = resp
+        .json()
+        .map_err(|e| anyhow::Error::new(crate::api::error::AgnesApiError::Parse(e.to_string())))?;
 
     let item = parsed.data.first().context("empty image response")?;
     let max_retries = req.max_retries.unwrap_or(api.config.max_retries);

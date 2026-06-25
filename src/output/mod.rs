@@ -1,7 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -176,7 +174,7 @@ pub fn download_with_retry(
     fs::create_dir_all(output_dir)?;
     let filename = unique_filename(url, ext);
     let path = output_dir.join(filename);
-    retry(max_retries, || {
+    crate::retry::retry(max_retries, || {
         let bytes = client.get(url).send()?.bytes()?;
         fs::write(&path, &bytes)?;
         Ok(path.clone())
@@ -212,27 +210,6 @@ fn hex_lower(bytes: impl AsRef<[u8]>) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
-}
-
-pub fn retry<T, F>(max_retries: u32, mut f: F) -> Result<T>
-where
-    F: FnMut() -> Result<T>,
-{
-    let mut attempt = 0u32;
-    loop {
-        match f() {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                attempt += 1;
-                if attempt > max_retries {
-                    return Err(e);
-                }
-                let delay = Duration::from_secs(1u64 << (attempt - 1).min(4));
-                log::debug!("retry {attempt}/{max_retries} after error: {e:#}");
-                thread::sleep(delay);
-            }
-        }
-    }
 }
 
 pub fn infer_ext_from_url(url: &str, default: &str) -> String {

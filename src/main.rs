@@ -9,6 +9,7 @@ mod logging;
 mod media;
 mod output;
 mod ratio;
+mod retry;
 mod ui;
 
 use anyhow::{Context, Result};

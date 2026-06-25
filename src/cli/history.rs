@@ -1,17 +1,13 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind};
-use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState, Widget};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table, Widget};
 use std::io::{self, IsTerminal};
-use std::time::Duration;
 
 use crate::cli::list_tui::{
-    LIST_HELP_TEXT, buffer_to_string, copy_to_clipboard_silent, detail_field_tabs_line, detail_value_display,
-    parse_list_key, render_detail_panel, render_help_line, truncate_display,
+    LIST_HELP_TEXT, ListTable, buffer_to_string, run_list_tui, split_list_layout, truncate_display,
 };
 use crate::cli::util::non_empty_value;
 use crate::db::{AssetRecord, Database};
@@ -122,205 +118,30 @@ fn print_asset_list_table(rows: &[AssetRecord]) {
     println!("{}", render_asset_list_table(rows));
 }
 
-struct AssetListUiState {
-    rows: Vec<AssetRecord>,
-    table_state: TableState,
-    detail_field: AssetDetailField,
-}
+const ASSET_DETAIL_LABELS: [&str; 3] = ["ASSET URI", "REMOTE URL", "ID"];
+const ASSET_DETAIL_FIELD_COUNT: usize = ASSET_DETAIL_LABELS.len();
 
-impl AssetListUiState {
-    fn new(rows: Vec<AssetRecord>) -> Self {
-        let mut table_state = TableState::default();
-        if !rows.is_empty() {
-            table_state.select(Some(0));
-        }
-        Self { rows, table_state, detail_field: AssetDetailField::AssetUri }
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.table_state.selected().filter(|index| *index < self.rows.len())
-    }
-
-    fn selected_row(&self) -> Option<&AssetRecord> {
-        self.selected_index().and_then(|index| self.rows.get(index))
-    }
-
-    fn selected_detail_value(&self) -> Option<&str> {
-        let row = self.selected_row()?;
-        match self.detail_field {
-            AssetDetailField::AssetUri => non_empty_value(Some(row.asset_uri.as_str())),
-            AssetDetailField::RemoteUrl => non_empty_value(Some(row.remote_url.as_str())),
-            AssetDetailField::Id => non_empty_value(Some(row.id.as_str())),
-        }
-    }
-
-    fn selected_detail_display_value(&self) -> String {
-        detail_value_display(self.selected_detail_value().unwrap_or("-"))
-    }
-
-    fn select_next(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let next = self
-            .selected_index()
-            .map_or(0, |index| index.saturating_add(1).min(self.rows.len() - 1));
-        self.table_state.select(Some(next));
-    }
-
-    fn select_previous(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let previous = self.selected_index().map_or(0, |index| index.saturating_sub(1));
-        self.table_state.select(Some(previous));
-    }
-
-    fn select_first(&mut self) {
-        if !self.rows.is_empty() {
-            self.table_state.select(Some(0));
-        }
-    }
-
-    fn select_last(&mut self) {
-        if !self.rows.is_empty() {
-            self.table_state.select(Some(self.rows.len() - 1));
-        }
-    }
-
-    fn select_next_detail(&mut self) {
-        self.detail_field = self.detail_field.next();
-    }
-
-    fn select_previous_detail(&mut self) {
-        self.detail_field = self.detail_field.previous();
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AssetDetailField {
-    AssetUri,
-    RemoteUrl,
-    Id,
-}
-
-impl AssetDetailField {
-    const ALL: [Self; 3] = [Self::AssetUri, Self::RemoteUrl, Self::Id];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::AssetUri => "ASSET URI",
-            Self::RemoteUrl => "REMOTE URL",
-            Self::Id => "ID",
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::AssetUri => 0,
-            Self::RemoteUrl => 1,
-            Self::Id => 2,
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::AssetUri => Self::RemoteUrl,
-            Self::RemoteUrl => Self::Id,
-            Self::Id => Self::AssetUri,
-        }
-    }
-
-    fn previous(self) -> Self {
-        match self {
-            Self::AssetUri => Self::Id,
-            Self::RemoteUrl => Self::AssetUri,
-            Self::Id => Self::RemoteUrl,
-        }
+fn asset_detail_value(row: &AssetRecord, field: usize) -> Option<&str> {
+    match field {
+        0 => non_empty_value(Some(row.asset_uri.as_str())),
+        1 => non_empty_value(Some(row.remote_url.as_str())),
+        2 => non_empty_value(Some(row.id.as_str())),
+        _ => None,
     }
 }
 
 fn run_asset_list_tui(rows: Vec<AssetRecord>) -> Result<()> {
-    if rows.is_empty() {
-        println!("No assets recorded.");
-        return Ok(());
-    }
-
-    let mut terminal = ratatui::try_init()?;
-    let result = run_asset_list_app(&mut terminal, rows);
-    ratatui::restore();
-    result
+    run_list_tui(
+        rows,
+        "No assets recorded.",
+        ASSET_DETAIL_FIELD_COUNT,
+        asset_detail_value,
+        render_asset_list_ui,
+    )
 }
 
-fn run_asset_list_app(terminal: &mut DefaultTerminal, rows: Vec<AssetRecord>) -> Result<()> {
-    let mut state = AssetListUiState::new(rows);
-    loop {
-        terminal.draw(|frame| render_asset_list_ui(frame, &mut state))?;
-        if event::poll(Duration::from_millis(120))?
-            && let Event::Key(key) = event::read()?
-        {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-            if handle_asset_list_key(key.code, key.modifiers, &mut state) {
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn handle_asset_list_key(
-    key: crossterm::event::KeyCode,
-    modifiers: crossterm::event::KeyModifiers,
-    state: &mut AssetListUiState,
-) -> bool {
-    let action = parse_list_key(key, modifiers);
-    if action.quit {
-        return true;
-    }
-    if action.row_up {
-        state.select_previous();
-    }
-    if action.row_down {
-        state.select_next();
-    }
-    if action.row_first {
-        state.select_first();
-    }
-    if action.row_last {
-        state.select_last();
-    }
-    if action.row_page_up {
-        for _ in 0..10 {
-            state.select_previous();
-        }
-    }
-    if action.row_page_down {
-        for _ in 0..10 {
-            state.select_next();
-        }
-    }
-    if action.field_previous {
-        state.select_previous_detail();
-    }
-    if action.field_next {
-        state.select_next_detail();
-    }
-    if action.copy
-        && let Some(value) = state.selected_detail_value()
-    {
-        copy_to_clipboard_silent(value);
-    }
-    false
-}
-
-fn render_asset_list_ui(frame: &mut ratatui::Frame, state: &mut AssetListUiState) {
-    let area = frame.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(4), Constraint::Length(1)])
-        .split(area);
+fn render_asset_list_ui(frame: &mut ratatui::Frame, state: &mut ListTable<AssetRecord>) {
+    let chunks = split_list_layout(frame.area());
 
     let table = asset_table(&state.rows)
         .block(Block::default().title("Assets").borders(Borders::ALL))
@@ -331,14 +152,17 @@ fn render_asset_list_ui(frame: &mut ratatui::Frame, state: &mut AssetListUiState
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
-    frame.render_stateful_widget(table, chunks[0], &mut state.table_state);
+    frame.render_stateful_widget(table, chunks.table, state.table_state_mut());
 
-    let labels: Vec<&str> = AssetDetailField::ALL.iter().map(|field| field.label()).collect();
-    let tabs = detail_field_tabs_line(&labels, state.detail_field.index());
-    let value = state.selected_detail_display_value();
-    render_detail_panel(frame, chunks[1], tabs, value);
-
-    render_help_line(frame, chunks[2], LIST_HELP_TEXT);
+    crate::cli::list_tui::render_list_detail_help(
+        frame,
+        chunks.detail,
+        chunks.help,
+        &ASSET_DETAIL_LABELS,
+        state.detail_field,
+        state.selected_detail_display(asset_detail_value),
+        LIST_HELP_TEXT,
+    );
 }
 
 fn render_asset_list_table(rows: &[AssetRecord]) -> String {
@@ -397,21 +221,27 @@ mod tests {
 
     #[test]
     fn asset_list_detail_field_cycles() {
-        let mut state = AssetListUiState::new(vec![sample_asset()]);
+        let mut state = ListTable::new(vec![sample_asset()]);
 
-        assert_eq!(state.detail_field, AssetDetailField::AssetUri);
-        assert_eq!(state.selected_detail_value(), Some("asset://c8d4eb63a84b"));
-
-        state.select_next_detail();
-        assert_eq!(state.detail_field, AssetDetailField::RemoteUrl);
+        assert_eq!(state.detail_field, 0);
         assert_eq!(
-            state.selected_detail_value(),
+            state.selected_detail_copy_value(asset_detail_value),
+            Some("asset://c8d4eb63a84b")
+        );
+
+        state.select_next_detail(ASSET_DETAIL_FIELD_COUNT);
+        assert_eq!(state.detail_field, 1);
+        assert_eq!(
+            state.selected_detail_copy_value(asset_detail_value),
             Some("https://cdn.example.com/images/abc.png")
         );
 
-        state.select_next_detail();
-        assert_eq!(state.detail_field, AssetDetailField::Id);
-        assert_eq!(state.selected_detail_value(), Some("c8d4eb63a84b"));
+        state.select_next_detail(ASSET_DETAIL_FIELD_COUNT);
+        assert_eq!(state.detail_field, 2);
+        assert_eq!(
+            state.selected_detail_copy_value(asset_detail_value),
+            Some("c8d4eb63a84b")
+        );
     }
 
     #[test]
@@ -419,9 +249,8 @@ mod tests {
         let mut asset = sample_asset();
         asset.remote_url = "https://example.com/".to_string() + &"x".repeat(250);
 
-        let mut state = AssetListUiState::new(vec![asset]);
-        state.detail_field = AssetDetailField::RemoteUrl;
-        let displayed = state.selected_detail_display_value();
+        let state = ListTable::with_detail_field(vec![asset], 1);
+        let displayed = state.selected_detail_display(asset_detail_value);
         assert_eq!(
             displayed.chars().count(),
             crate::cli::list_tui::DETAIL_DISPLAY_MAX_CHARS

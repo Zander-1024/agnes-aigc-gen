@@ -1,4 +1,5 @@
 mod deliver;
+mod error;
 mod image;
 pub mod types;
 mod video;
@@ -9,13 +10,12 @@ pub use video::{VideoRequest, generate_video, refresh_video_task, wait_video_tas
 use std::time::Duration;
 
 use anyhow::Result;
-use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::logging;
-use crate::output::retry;
+use crate::retry::{is_retryable_http_status, retry};
 
 pub struct ApiClient {
     pub client: Client,
@@ -71,7 +71,7 @@ impl ApiClient {
         logging::log_request("POST", &url, body_value.as_ref());
         let resp = retry(self.config.max_retries, || {
             let resp = self.client.post(&url).bearer_auth(&self.api_key).json(body).send()?;
-            if should_retry_status(resp.status()) {
+            if is_retryable_http_status(resp.status()) {
                 anyhow::bail!("retryable status {}", resp.status());
             }
             Ok(resp)
@@ -93,7 +93,7 @@ impl ApiClient {
         logging::log_request("GET", url, None);
         let resp = retry(self.config.max_retries, || {
             let resp = self.client.get(url).bearer_auth(&self.api_key).send()?;
-            if should_retry_status(resp.status()) {
+            if is_retryable_http_status(resp.status()) {
                 anyhow::bail!("retryable status {}", resp.status());
             }
             Ok(resp)
@@ -101,8 +101,14 @@ impl ApiClient {
         log::debug!("response status={}", resp.status());
         Ok(resp)
     }
-}
 
-fn should_retry_status(status: StatusCode) -> bool {
-    status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE || status.is_server_error()
+    /// Map a non-success HTTP response to a typed API error (logs body).
+    pub fn ensure_success(resp: Response, operation: impl Into<String>) -> Result<Response> {
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(resp);
+        }
+        let body = resp.text().unwrap_or_default();
+        error::http_failure(status, body, operation)
+    }
 }

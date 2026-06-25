@@ -1,18 +1,14 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind};
-use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState, Widget};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table, Widget};
 use std::io::{self, IsTerminal};
-use std::time::Duration;
 
 use crate::api::{ApiClient, refresh_video_task, wait_video_task};
 use crate::cli::list_tui::{
-    LIST_HELP_TEXT, buffer_to_string, copy_to_clipboard_silent, detail_field_tabs_line, detail_value_display,
-    parse_list_key, render_detail_panel, render_help_line, truncate_display,
+    LIST_HELP_TEXT, ListTable, buffer_to_string, run_list_tui, split_list_layout, truncate_display,
 };
 use crate::cli::util::{non_empty_value, parse_output_format};
 use crate::config::AppConfig;
@@ -110,205 +106,30 @@ fn print_task_list_table(rows: &[VideoTaskRecord]) {
     println!("{}", render_task_list_table(rows));
 }
 
-struct TaskListUiState {
-    rows: Vec<VideoTaskRecord>,
-    table_state: TableState,
-    detail_field: TaskDetailField,
-}
+const TASK_DETAIL_LABELS: [&str; 3] = ["QUERY ID", "PROMPT", "URI"];
+const TASK_DETAIL_FIELD_COUNT: usize = TASK_DETAIL_LABELS.len();
 
-impl TaskListUiState {
-    fn new(rows: Vec<VideoTaskRecord>) -> Self {
-        let mut table_state = TableState::default();
-        if !rows.is_empty() {
-            table_state.select(Some(0));
-        }
-        Self { rows, table_state, detail_field: TaskDetailField::QueryId }
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.table_state.selected().filter(|index| *index < self.rows.len())
-    }
-
-    fn selected_row(&self) -> Option<&VideoTaskRecord> {
-        self.selected_index().and_then(|index| self.rows.get(index))
-    }
-
-    fn selected_detail_value(&self) -> Option<&str> {
-        let row = self.selected_row()?;
-        match self.detail_field {
-            TaskDetailField::QueryId => non_empty_value(Some(row.task_id.as_str())),
-            TaskDetailField::Prompt => non_empty_value(row.prompt.as_deref()),
-            TaskDetailField::Uri => non_empty_value(row.uri.as_deref()),
-        }
-    }
-
-    fn selected_detail_display_value(&self) -> String {
-        detail_value_display(self.selected_detail_value().unwrap_or("-"))
-    }
-
-    fn select_next(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let next = self
-            .selected_index()
-            .map_or(0, |index| index.saturating_add(1).min(self.rows.len() - 1));
-        self.table_state.select(Some(next));
-    }
-
-    fn select_previous(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let previous = self.selected_index().map_or(0, |index| index.saturating_sub(1));
-        self.table_state.select(Some(previous));
-    }
-
-    fn select_first(&mut self) {
-        if !self.rows.is_empty() {
-            self.table_state.select(Some(0));
-        }
-    }
-
-    fn select_last(&mut self) {
-        if !self.rows.is_empty() {
-            self.table_state.select(Some(self.rows.len() - 1));
-        }
-    }
-
-    fn select_next_detail(&mut self) {
-        self.detail_field = self.detail_field.next();
-    }
-
-    fn select_previous_detail(&mut self) {
-        self.detail_field = self.detail_field.previous();
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TaskDetailField {
-    QueryId,
-    Prompt,
-    Uri,
-}
-
-impl TaskDetailField {
-    const ALL: [Self; 3] = [Self::QueryId, Self::Prompt, Self::Uri];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::QueryId => "QUERY ID",
-            Self::Prompt => "PROMPT",
-            Self::Uri => "URI",
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::QueryId => 0,
-            Self::Prompt => 1,
-            Self::Uri => 2,
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::QueryId => Self::Prompt,
-            Self::Prompt => Self::Uri,
-            Self::Uri => Self::QueryId,
-        }
-    }
-
-    fn previous(self) -> Self {
-        match self {
-            Self::QueryId => Self::Uri,
-            Self::Prompt => Self::QueryId,
-            Self::Uri => Self::Prompt,
-        }
+fn task_detail_value(row: &VideoTaskRecord, field: usize) -> Option<&str> {
+    match field {
+        0 => non_empty_value(Some(row.task_id.as_str())),
+        1 => non_empty_value(row.prompt.as_deref()),
+        2 => non_empty_value(row.uri.as_deref()),
+        _ => None,
     }
 }
 
 fn run_task_list_tui(rows: Vec<VideoTaskRecord>) -> Result<()> {
-    if rows.is_empty() {
-        println!("No video tasks recorded.");
-        return Ok(());
-    }
-
-    let mut terminal = ratatui::try_init()?;
-    let result = run_task_list_app(&mut terminal, rows);
-    ratatui::restore();
-    result
+    run_list_tui(
+        rows,
+        "No video tasks recorded.",
+        TASK_DETAIL_FIELD_COUNT,
+        task_detail_value,
+        render_task_list_ui,
+    )
 }
 
-fn run_task_list_app(terminal: &mut DefaultTerminal, rows: Vec<VideoTaskRecord>) -> Result<()> {
-    let mut state = TaskListUiState::new(rows);
-    loop {
-        terminal.draw(|frame| render_task_list_ui(frame, &mut state))?;
-        if event::poll(Duration::from_millis(120))?
-            && let Event::Key(key) = event::read()?
-        {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-            if handle_task_list_key(key.code, key.modifiers, &mut state) {
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn handle_task_list_key(
-    key: crossterm::event::KeyCode,
-    modifiers: crossterm::event::KeyModifiers,
-    state: &mut TaskListUiState,
-) -> bool {
-    let action = parse_list_key(key, modifiers);
-    if action.quit {
-        return true;
-    }
-    if action.row_up {
-        state.select_previous();
-    }
-    if action.row_down {
-        state.select_next();
-    }
-    if action.row_first {
-        state.select_first();
-    }
-    if action.row_last {
-        state.select_last();
-    }
-    if action.row_page_up {
-        for _ in 0..10 {
-            state.select_previous();
-        }
-    }
-    if action.row_page_down {
-        for _ in 0..10 {
-            state.select_next();
-        }
-    }
-    if action.field_previous {
-        state.select_previous_detail();
-    }
-    if action.field_next {
-        state.select_next_detail();
-    }
-    if action.copy
-        && let Some(value) = state.selected_detail_value()
-    {
-        copy_to_clipboard_silent(value);
-    }
-    false
-}
-
-fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) {
-    let area = frame.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(4), Constraint::Length(1)])
-        .split(area);
+fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut ListTable<VideoTaskRecord>) {
+    let chunks = split_list_layout(frame.area());
 
     let table = task_table(&state.rows)
         .block(Block::default().title("Video Tasks").borders(Borders::ALL))
@@ -319,14 +140,17 @@ fn render_task_list_ui(frame: &mut ratatui::Frame, state: &mut TaskListUiState) 
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
-    frame.render_stateful_widget(table, chunks[0], &mut state.table_state);
+    frame.render_stateful_widget(table, chunks.table, state.table_state_mut());
 
-    let labels: Vec<&str> = TaskDetailField::ALL.iter().map(|field| field.label()).collect();
-    let tabs = detail_field_tabs_line(&labels, state.detail_field.index());
-    let value = state.selected_detail_display_value();
-    render_detail_panel(frame, chunks[1], tabs, value);
-
-    render_help_line(frame, chunks[2], LIST_HELP_TEXT);
+    crate::cli::list_tui::render_list_detail_help(
+        frame,
+        chunks.detail,
+        chunks.help,
+        &TASK_DETAIL_LABELS,
+        state.detail_field,
+        state.selected_detail_display(task_detail_value),
+        LIST_HELP_TEXT,
+    );
 }
 
 fn render_task_list_table(rows: &[VideoTaskRecord]) -> String {
@@ -478,14 +302,14 @@ mod tests {
         second.task_id = "video_def".into();
         second.uri = None;
 
-        let mut state = TaskListUiState::new(vec![sample_task(), second]);
+        let mut state = ListTable::new(vec![sample_task(), second]);
 
         assert_eq!(state.selected_row().unwrap().id, 7);
-        assert_eq!(state.selected_detail_value(), Some("video_abc"));
+        assert_eq!(state.selected_detail_copy_value(task_detail_value), Some("video_abc"));
 
         state.select_next();
         assert_eq!(state.selected_row().unwrap().id, 8);
-        assert_eq!(state.selected_detail_value(), Some("video_def"));
+        assert_eq!(state.selected_detail_copy_value(task_detail_value), Some("video_def"));
 
         state.select_previous();
         assert_eq!(state.selected_row().unwrap().id, 7);
@@ -493,28 +317,35 @@ mod tests {
 
     #[test]
     fn task_list_detail_field_cycles_copyable_fields() {
-        let mut state = TaskListUiState::new(vec![sample_task()]);
+        let mut state = ListTable::new(vec![sample_task()]);
 
-        assert_eq!(state.detail_field, TaskDetailField::QueryId);
-        assert_eq!(state.selected_detail_value(), Some("video_abc"));
+        assert_eq!(state.detail_field, 0);
+        assert_eq!(state.selected_detail_copy_value(task_detail_value), Some("video_abc"));
 
-        state.select_next_detail();
-        assert_eq!(state.detail_field, TaskDetailField::Prompt);
-        assert_eq!(state.selected_detail_value(), Some("A red sphere rolls across a table"));
+        state.select_next_detail(TASK_DETAIL_FIELD_COUNT);
+        assert_eq!(state.detail_field, 1);
+        assert_eq!(
+            state.selected_detail_copy_value(task_detail_value),
+            Some("A red sphere rolls across a table")
+        );
 
-        state.select_next_detail();
-        assert_eq!(state.detail_field, TaskDetailField::Uri);
-        assert_eq!(state.selected_detail_value(), Some("https://example.com/video.mp4"));
+        state.select_next_detail(TASK_DETAIL_FIELD_COUNT);
+        assert_eq!(state.detail_field, 2);
+        assert_eq!(
+            state.selected_detail_copy_value(task_detail_value),
+            Some("https://example.com/video.mp4")
+        );
 
-        state.select_next_detail();
-        assert_eq!(state.detail_field, TaskDetailField::QueryId);
+        state.select_next_detail(TASK_DETAIL_FIELD_COUNT);
+        assert_eq!(state.detail_field, 0);
     }
 
     #[test]
     fn task_detail_tabs_exclude_value() {
-        let state = TaskListUiState::new(vec![sample_task()]);
-        let labels: Vec<&str> = TaskDetailField::ALL.iter().map(|field| field.label()).collect();
-        let line = detail_field_tabs_line(&labels, state.detail_field.index());
+        use crate::cli::list_tui::detail_field_tabs_line;
+
+        let state = ListTable::new(vec![sample_task()]);
+        let line = detail_field_tabs_line(&TASK_DETAIL_LABELS, state.detail_field);
         let text = line.to_string();
 
         assert!(text.contains("QUERY ID"));
@@ -527,17 +358,16 @@ mod tests {
         let mut task = sample_task();
         task.prompt = Some("x".repeat(250));
 
-        let mut state = TaskListUiState::new(vec![task]);
-        state.detail_field = TaskDetailField::Prompt;
+        let state = ListTable::with_detail_field(vec![task], 1);
 
-        let displayed = state.selected_detail_display_value();
+        let displayed = state.selected_detail_display(task_detail_value);
         assert_eq!(
             displayed.chars().count(),
             crate::cli::list_tui::DETAIL_DISPLAY_MAX_CHARS
         );
         assert!(displayed.ends_with("..."));
 
-        let full = state.selected_detail_value().unwrap();
+        let full = state.selected_detail_copy_value(task_detail_value).unwrap();
         assert_eq!(full.chars().count(), 250);
         assert_ne!(full, displayed.as_str());
     }

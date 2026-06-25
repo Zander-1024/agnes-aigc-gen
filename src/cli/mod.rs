@@ -1,4 +1,4 @@
-mod util;
+pub(crate) mod util;
 
 mod chat;
 mod dashboard;

@@ -94,8 +94,8 @@ impl DashboardApp {
     fn new() -> Result<Self> {
         let cfg = AppConfig::load()?;
         let mut tasks = TasksView::load(LIST_LIMIT)?;
-        if !tasks.rows.is_empty() {
-            tasks.table_state.select(Some(0));
+        if !tasks.list.rows.is_empty() {
+            tasks.list.table_state_mut().select(Some(0));
         }
         Ok(Self {
             page: Page::Home,

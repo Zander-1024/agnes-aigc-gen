@@ -2,21 +2,22 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use reqwest::{StatusCode, Url};
+use reqwest::Url;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::api::ApiClient;
 use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
+use crate::api::error;
 use crate::api::image::resolve_image_seed;
 use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoStatus, VideoTaskResponse};
 use crate::db::VideoTaskRecord;
-use crate::logging;
 use crate::media::input::ImageInput;
 use crate::media::input::{ensure_same_ratio, image_dimensions_from_bytes, load_image_bytes};
 use crate::media::{classify_input, parse_image_inputs};
-use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url, retry};
+use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url};
 use crate::ratio::{AspectRatio, resolve_video_timing, video_dimensions};
+use crate::retry::{backoff_delay, is_retryable_http_status};
 
 const POLL_EARLY_PHASE: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_EARLY: Duration = Duration::from_secs(30);
@@ -172,12 +173,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     apply_video_frames(&mut body, frame_urls);
 
     let resp = api.post_json("videos", &body)?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        logging::log_response(status.as_u16(), &text);
-        bail!("video task creation failed ({status}): {text}");
-    }
+    let resp = ApiClient::ensure_success(resp, "video task creation")?;
     let created: VideoTaskResponse = resp.json().context("parse video create response")?;
     let query_ids = created.query_ids();
     let query_id = query_ids.first().cloned().context("missing video_id/task_id")?;
@@ -262,12 +258,7 @@ fn record_video_query_ids(input_record: &mut Value, query_ids: &[String], create
 /// Single GET for a video task (no polling loop).
 pub fn fetch_video_task_once(api: &ApiClient, query_id: &str) -> Result<VideoTaskResponse> {
     let resp = get_video_query(api, query_id)?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        logging::log_response(status.as_u16(), &text);
-        bail!("fetch video task failed ({status}): {text}");
-    }
+    let resp = ApiClient::ensure_success(resp, "fetch video task")?;
     resp.json().context("parse video task")
 }
 
@@ -365,23 +356,26 @@ fn resolve_or_create_video_asset(api: &ApiClient, query_id: &str, url: &str) -> 
 
 pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskResponse> {
     let started = Instant::now();
+    let mut http_attempt = 0u32;
     loop {
         let resp = get_video_query(api, query_id)?;
-        if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
-            let wait = poll_interval(started.elapsed());
-            log::debug!(
-                "video query {query_id} poll: 503 service unavailable, retry in {}s",
-                wait.as_secs()
-            );
-            thread::sleep(wait);
-            continue;
+        let status = resp.status();
+        if !status.is_success() {
+            if is_retryable_http_status(status) && http_attempt < api.config.max_retries {
+                http_attempt += 1;
+                let wait = backoff_delay(http_attempt);
+                log::debug!(
+                    "video query {query_id} poll: {status} retry {http_attempt}/{} in {}ms",
+                    api.config.max_retries,
+                    wait.as_millis()
+                );
+                thread::sleep(wait);
+                continue;
+            }
+            let body = resp.text().unwrap_or_default();
+            return error::http_failure(status, body, "poll video");
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().unwrap_or_default();
-            logging::log_response(status.as_u16(), &text);
-            bail!("poll video failed ({status}): {text}");
-        }
+        http_attempt = 0;
         let task: VideoTaskResponse = resp.json().context("parse video task")?;
         let _ = persist_task_from_response(api, query_id, &task);
         match &task.status {
@@ -407,7 +401,7 @@ pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskRespo
 }
 
 fn poll_and_finalize(api: &ApiClient, query_id: &str, output: &FinalizeOutput) -> Result<GenerationResult> {
-    let task = retry(api.config.max_retries, || poll_video_task(api, query_id))?;
+    let task = poll_video_task(api, query_id)?;
     let remote = task.result_url().context("completed task missing video url")?;
 
     let max_retries = output.max_retries.unwrap_or(api.config.max_retries);

@@ -1,15 +1,16 @@
 use anyhow::Result;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Constraint;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
 use crate::api::{ApiClient, refresh_video_task};
 use crate::cli::list_tui::{
-    copy_to_clipboard_silent, detail_field_tabs_line, detail_value_display, parse_list_key, render_detail_panel,
-    truncate_display,
+    ListTable, copy_to_clipboard_silent, parse_list_key, render_list_detail_help, split_list_layout, truncate_display,
 };
+use crate::cli::util::non_empty_value;
 use crate::config::AppConfig;
 use crate::db::{Database, VideoTaskRecord};
 
@@ -19,41 +20,45 @@ use super::task_display::{
 };
 
 const TASK_HELP: &str = "↑↓ row  ←→ field  Enter copy  r refresh  g running  Esc back";
+const TASK_DETAIL_LABELS: [&str; 3] = ["QUERY ID", "PROMPT", "URI"];
+const TASK_DETAIL_FIELD_COUNT: usize = TASK_DETAIL_LABELS.len();
+
+fn task_detail_value(row: &VideoTaskRecord, field: usize) -> Option<&str> {
+    match field {
+        0 => non_empty_value(Some(row.task_id.as_str())),
+        1 => non_empty_value(row.prompt.as_deref()),
+        2 => non_empty_value(row.uri.as_deref()),
+        _ => None,
+    }
+}
 
 pub struct TasksView {
-    pub rows: Vec<VideoTaskRecord>,
-    pub table_state: TableState,
-    pub detail_field: usize,
+    pub list: ListTable<VideoTaskRecord>,
     pub highlight_id: Option<i64>,
 }
 
 impl TasksView {
     pub fn load(limit: usize) -> Result<Self> {
-        Ok(Self {
-            rows: refresh_tasks(limit)?,
-            table_state: TableState::default(),
-            detail_field: 0,
-            highlight_id: None,
-        })
+        Ok(Self { list: ListTable::new(refresh_tasks(limit)?), highlight_id: None })
     }
 
     pub fn refresh(&mut self, limit: usize) {
         if let Ok(rows) = refresh_tasks(limit) {
-            self.rows = rows;
+            self.list.rows = rows;
             if let Some(id) = self.highlight_id {
-                if let Some(index) = self.rows.iter().position(|r| r.id == id) {
-                    self.table_state.select(Some(index));
+                if let Some(index) = self.list.rows.iter().position(|r| r.id == id) {
+                    self.list.table_state_mut().select(Some(index));
                 }
-            } else if self.table_state.selected().is_none() && !self.rows.is_empty() {
-                self.table_state.select(Some(0));
+            } else if self.list.selected_index().is_none() && !self.list.rows.is_empty() {
+                self.list.table_state_mut().select(Some(0));
             }
         }
     }
 
     pub fn select_task_id(&mut self, local_id: i64) {
         self.highlight_id = Some(local_id);
-        if let Some(index) = self.rows.iter().position(|r| r.id == local_id) {
-            self.table_state.select(Some(index));
+        if let Some(index) = self.list.rows.iter().position(|r| r.id == local_id) {
+            self.list.table_state_mut().select(Some(index));
         }
     }
 
@@ -68,7 +73,7 @@ impl TasksView {
     }
 
     pub fn processing_count(&self) -> usize {
-        self.rows.iter().filter(|r| r.phase == "processing").count()
+        self.list.rows.iter().filter(|r| r.phase == "processing").count()
     }
 
     pub fn has_processing(&self) -> bool {
@@ -76,38 +81,19 @@ impl TasksView {
     }
 
     pub fn row_by_id(&self, local_id: i64) -> Option<&VideoTaskRecord> {
-        self.rows.iter().find(|r| r.id == local_id)
+        self.list.rows.iter().find(|r| r.id == local_id)
     }
 
     pub fn primary_running(&self) -> Option<&VideoTaskRecord> {
-        self.rows
+        self.list
+            .rows
             .iter()
             .filter(|r| r.phase == "processing")
             .max_by_key(|r| (r.progress.unwrap_or(0), r.id))
     }
 
     pub fn task_strip_data(&self, tick: u64) -> TaskStripData {
-        build_task_strip(&self.rows, tick, 2, 2)
-    }
-
-    pub fn selected_row(&self) -> Option<&VideoTaskRecord> {
-        self.table_state.selected().and_then(|i| self.rows.get(i))
-    }
-
-    fn detail_labels() -> [&'static str; 3] {
-        ["QUERY ID", "PROMPT", "URI"]
-    }
-
-    fn detail_value(&self) -> &str {
-        let row = match self.selected_row() {
-            Some(r) => r,
-            None => return "-",
-        };
-        match self.detail_field {
-            0 => row.task_id.as_str(),
-            1 => row.prompt.as_deref().unwrap_or("-"),
-            _ => row.uri.as_deref().unwrap_or("-"),
-        }
+        build_task_strip(&self.list.rows, tick, 2, 2)
     }
 
     pub fn handle_key(
@@ -115,62 +101,26 @@ impl TasksView {
         key: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) -> TaskAction {
-        let action = parse_list_key(key, modifiers);
-        if action.quit {
-            return TaskAction::Back;
-        }
-        if action.row_up {
-            self.select_previous();
-        }
-        if action.row_down {
-            self.select_next();
-        }
-        if action.field_previous {
-            self.detail_field = if self.detail_field == 0 {
-                2
-            } else {
-                self.detail_field - 1
-            };
-        }
-        if action.field_next {
-            self.detail_field = (self.detail_field + 1) % 3;
-        }
-        if action.copy {
-            copy_to_clipboard_silent(self.detail_value());
-        }
         if key == crossterm::event::KeyCode::Char('r') {
             return TaskAction::Refresh;
         }
         if key == crossterm::event::KeyCode::Char('g') {
             return TaskAction::SelectRunning;
         }
+
+        let action = parse_list_key(key, modifiers);
+        if action.quit {
+            return TaskAction::Back;
+        }
+        self.list.apply_key_action(&action, TASK_DETAIL_FIELD_COUNT);
+        if action.copy {
+            copy_to_clipboard_silent(self.list.selected_detail_copy_value(task_detail_value).unwrap_or("-"));
+        }
         TaskAction::None
     }
 
-    fn select_next(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let next = self
-            .table_state
-            .selected()
-            .map_or(0, |i| i.saturating_add(1).min(self.rows.len() - 1));
-        self.table_state.select(Some(next));
-    }
-
-    fn select_previous(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let prev = self.table_state.selected().map_or(0, |i| i.saturating_sub(1));
-        self.table_state.select(Some(prev));
-    }
-
     pub fn render(&mut self, frame: &mut Frame, area: Rect, tick: u64) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(6), Constraint::Length(4), Constraint::Length(1)])
-            .split(area);
+        let chunks = split_list_layout(area);
 
         let running = self.processing_count();
         let title = if running > 0 {
@@ -179,7 +129,7 @@ impl TasksView {
             "Video Tasks".into()
         };
 
-        let table = task_table(&self.rows, tick)
+        let table = task_table(&self.list.rows, tick)
             .block(Block::default().title(title).borders(Borders::ALL))
             .highlight_symbol(">> ")
             .row_highlight_style(
@@ -188,16 +138,16 @@ impl TasksView {
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
-        frame.render_stateful_widget(table, chunks[0], &mut self.table_state);
+        frame.render_stateful_widget(table, chunks.table, self.list.table_state_mut());
 
-        let labels: Vec<&str> = Self::detail_labels().to_vec();
-        let tabs = detail_field_tabs_line(&labels, self.detail_field);
-        let value = detail_value_display(self.detail_value());
-        render_detail_panel(frame, chunks[1], tabs, value);
-
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(TASK_HELP).style(Style::default().fg(Color::DarkGray)),
-            chunks[2],
+        render_list_detail_help(
+            frame,
+            chunks.detail,
+            chunks.help,
+            &TASK_DETAIL_LABELS,
+            self.list.detail_field,
+            self.list.selected_detail_display(task_detail_value),
+            TASK_HELP,
         );
     }
 }

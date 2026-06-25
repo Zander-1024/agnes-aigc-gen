@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
 use async_stream::stream;
 use eventsource_stream::Eventsource;
@@ -8,9 +7,11 @@ use pi_ai::{
     AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Content, Context, Error, Message, Model,
     StopReason, StreamOptions, Usage,
 };
-use reqwest::{Response, StatusCode};
+use reqwest::Response;
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+use crate::retry::{backoff_delay, is_retryable_http_status};
 
 const CHAT_REQUEST_MAX_ATTEMPTS: u32 = 3;
 
@@ -345,7 +346,7 @@ async fn send_chat_request_with_retries(
                 }
                 let body = resp.text().await.unwrap_or_default();
                 let err = Error::ProviderError { status: status.as_u16(), body };
-                if !should_retry_chat_status(status) || attempt == CHAT_REQUEST_MAX_ATTEMPTS {
+                if !is_retryable_http_status(status) || attempt == CHAT_REQUEST_MAX_ATTEMPTS {
                     return Err(err);
                 }
                 log::debug!("chat request retry {attempt}/{CHAT_REQUEST_MAX_ATTEMPTS} after status {status}");
@@ -360,21 +361,10 @@ async fn send_chat_request_with_retries(
                 last_retryable_error = Some(err);
             }
         }
-        tokio::time::sleep(chat_retry_delay(attempt)).await;
+        tokio::time::sleep(backoff_delay(attempt)).await;
     }
 
     Err(last_retryable_error.unwrap_or_else(|| Error::InvalidResponse("chat request retry exhausted".into())))
-}
-
-fn should_retry_chat_status(status: StatusCode) -> bool {
-    status == StatusCode::TOO_MANY_REQUESTS
-        || status == StatusCode::REQUEST_TIMEOUT
-        || status == StatusCode::SERVICE_UNAVAILABLE
-        || status.is_server_error()
-}
-
-fn chat_retry_delay(attempt: u32) -> Duration {
-    Duration::from_millis(100 * attempt as u64)
 }
 
 pub fn build_chat_body(model: &Model, context: &Context, options: &AgnesStreamOptions) -> Value {

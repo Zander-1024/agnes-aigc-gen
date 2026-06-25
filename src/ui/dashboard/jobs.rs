@@ -6,7 +6,7 @@ use tokio::sync::mpsc as async_mpsc;
 use crate::api::{ApiClient, ImageRequest, VideoRequest, generate_image, generate_video};
 use crate::config::AppConfig;
 use crate::output::{GenerationResult, OutputFormat};
-use crate::ratio::AspectRatio;
+use crate::ratio::{AspectRatio, ImageResolutionTier};
 
 pub enum JobRequest {
     Image(ImageJobParams),
@@ -16,6 +16,7 @@ pub enum JobRequest {
 pub struct ImageJobParams {
     pub prompt: String,
     pub ratio: AspectRatio,
+    pub size_tier: ImageResolutionTier,
     pub inputs: Vec<String>,
     pub count: u32,
     pub seed: Option<u32>,
@@ -92,6 +93,7 @@ fn run_image_job(params: ImageJobParams) -> Result<JobEvent> {
             ImageRequest {
                 prompt: params.prompt,
                 ratio: params.ratio,
+                size_tier: params.size_tier,
                 inputs: params.inputs,
                 seed: params.seed,
                 output_dir: params.output_dir,
@@ -111,6 +113,7 @@ fn run_image_job(params: ImageJobParams) -> Result<JobEvent> {
             let cfg = cfg.clone();
             let prompt = params.prompt.clone();
             let ratio = params.ratio.clone();
+            let size_tier = params.size_tier;
             let inputs = params.inputs.clone();
             let output_dir = params.output_dir.clone();
             scope.spawn(move || {
@@ -120,6 +123,7 @@ fn run_image_job(params: ImageJobParams) -> Result<JobEvent> {
                         ImageRequest {
                             prompt,
                             ratio,
+                            size_tier,
                             inputs,
                             seed: None,
                             output_dir,

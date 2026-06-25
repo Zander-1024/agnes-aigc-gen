@@ -1,14 +1,12 @@
 use anyhow::Result;
 
-use crate::ratio::{
-    self, AspectRatio, IMAGE_RESOLUTION_TIER, RatioOption, VIDEO_RESOLUTION_TIER, video_timing_preview,
-};
+use crate::ratio::{self, AspectRatio, ImageResolutionTier, RatioOption, VIDEO_RESOLUTION_TIER, video_timing_preview};
 
 pub struct ImagePreview {
     #[allow(dead_code)]
     pub ratio_label: String,
+    #[allow(dead_code)]
     pub size: String,
-    pub tier: String,
     #[allow(dead_code)]
     pub input_count: usize,
     #[allow(dead_code)]
@@ -35,17 +33,26 @@ pub struct VideoPreview {
 pub fn build_image_preview(
     ratio_options: &[RatioOption],
     ratio_index: usize,
+    size_tier_index: usize,
     input_count: usize,
     count: u32,
     seed: &str,
 ) -> ImagePreview {
     let mut error = None;
-    let (ratio_label, size, tier) = if let Some(opt) = ratio_options.get(ratio_index) {
-        (opt.label.clone(), opt.dimensions.size_string(), opt.tier.to_string())
+    let ratio_label = if let Some(opt) = ratio_options.get(ratio_index) {
+        opt.label.clone()
     } else {
         error = Some("invalid ratio selection".into());
-        ("-".into(), "-".into(), IMAGE_RESOLUTION_TIER.into())
+        "-".into()
     };
+
+    let size = ratio::image_resolution_tiers()
+        .get(size_tier_index)
+        .map(|s| (*s).to_string())
+        .unwrap_or_else(|| {
+            error = Some("invalid size selection".into());
+            "-".into()
+        });
 
     let seed_note = if count > 1 {
         "disabled (batch)".into()
@@ -55,7 +62,7 @@ pub fn build_image_preview(
         format!("fixed {seed}")
     };
 
-    ImagePreview { ratio_label, size, tier, input_count, seed_note, error }
+    ImagePreview { ratio_label, size, input_count, seed_note, error }
 }
 
 pub fn build_video_preview(
@@ -128,17 +135,24 @@ pub fn ratio_from_index(options: &[RatioOption], index: usize) -> Result<AspectR
     AspectRatio::parse(label)
 }
 
+pub fn size_tier_from_index(index: usize) -> Result<ImageResolutionTier> {
+    let label = ratio::image_resolution_tiers()
+        .get(index)
+        .ok_or_else(|| anyhow::anyhow!("invalid size index"))?;
+    ImageResolutionTier::parse(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn image_preview_shows_size() {
+    fn image_preview_shows_size_tier() {
         let options = ratio::image_ratio_options();
         let index = options.iter().position(|o| o.label == "1:1").unwrap_or(0);
-        let preview = build_image_preview(&options, index, 0, 1, "");
+        let preview = build_image_preview(&options, index, 0, 0, 1, "");
         assert_eq!(preview.ratio_label, "1:1");
-        assert_eq!(preview.size, "1024x1024");
+        assert_eq!(preview.size, "1K");
     }
 
     #[test]

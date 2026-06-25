@@ -64,7 +64,8 @@ Agnes Image 2.1 Flash 适用于以下场景：
 | --- | --- | --- | --- |
 | string | 是 | model | 模型名称，固定为 agnes-image-2.1-flash |
 | string | 是 | prompt | 用于图像生成或图像编辑的文本指令 |
-| string | 否 | size | 输出图像尺寸，例如 1024x768 |
+| string | 否 | ratio | 宽高比：`1:1`、`3:4`、`4:3`、`16:9`、`9:16`、`2:3`、`3:2`、`21:9` |
+| string | 否 | size | 输出分辨率档位：`1K`、`2K`、`3K`、`4K`（默认 `1K`，最高 `4K`） |
 | object | 否 | extra_body | 高级工作流所需的额外参数 |
 | array | 否 | extra_body.image | 图生图任务中的输入图像 URL |
 | string | 否 | extra_body.response_format | 响应格式，例如 url |
@@ -84,7 +85,8 @@ curl https://apihub.agnes-ai.com/v1/images/generations \
   -d '{
     "model": "agnes-image-2.1-flash",
     "prompt": "A luminous floating city above a misty canyon at sunrise, cinematic realism",
-    "size": "1024x768"
+    "ratio": "4:3",
+    "size": "1K"
   }'
 ```
 
@@ -101,7 +103,8 @@ curl https://apihub.agnes-ai.com/v1/images/generations \
   -d '{
     "model": "agnes-image-2.1-flash",
     "prompt": "Transform the scene into a rain-soaked cyberpunk night with neon reflections while preserving the composition",
-    "size": "1024x768",
+    "ratio": "4:3",
+    "size": "1K",
     "extra_body": {
       "image": [
         "https://example.com/input-image.png"

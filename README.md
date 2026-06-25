@@ -6,7 +6,7 @@ CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) image and video 
 
 - **Image generation** — text-to-image and image-to-image (`agnes-image-2.1-flash`)
 - **Video generation** — text-to-video, image-to-video, multi-image (`agnes-video-v2.0`, async poll)
-- **Aspect ratios** — pass `--ratio` only; dimensions computed internally (never `--size`)
+- **Aspect ratios** — `--ratio` for aspect; `--size` for resolution tier (`1K`–`4K`, default `1K`)
 - **Batch images** — `-n` / `--count` 1–4 concurrent calls with partial-failure JSON
 - **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
 - **Asset history** — SQLite `asset://` references for image → video workflows
@@ -201,7 +201,7 @@ Default JSON (`uri` is remote URL):
 {
   "type": "image",
   "ratio": "16:9",
-  "size": "1280x720",
+  "size": "2K",
   "uri": "https://storage.googleapis.com/.../image.png",
   "asset_uri": "asset://abc123"
 }

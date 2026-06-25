@@ -6,11 +6,12 @@ use crate::api::types::{ExtraBodyImage, ImageGenerationRequest, ImageGenerationR
 use crate::logging;
 use crate::media::{classify_input, parse_image_inputs, resolve_for_api};
 use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url, write_base64_file};
-use crate::ratio::{AspectRatio, image_dimensions};
+use crate::ratio::{AspectRatio, ImageResolutionTier, validate_image_ratio};
 
 pub struct ImageRequest {
     pub prompt: String,
     pub ratio: AspectRatio,
+    pub size_tier: ImageResolutionTier,
     pub inputs: Vec<String>,
     /// Fixed seed 0–999; when None, a random seed in that range is used.
     pub seed: Option<u32>,
@@ -22,7 +23,8 @@ pub struct ImageRequest {
 }
 
 pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationResult> {
-    let dims = image_dimensions(&req.ratio)?;
+    validate_image_ratio(&req.ratio)?;
+    let size_tier = req.size_tier.as_str();
     let parsed = parse_image_inputs(&req.inputs)?;
     let mut resolved_inputs = Vec::new();
     let mut image_urls = Vec::new();
@@ -36,8 +38,8 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
     let seed = resolve_image_seed(req.seed)?;
 
     log::debug!(
-        "image generate size={} seed={seed} inputs={} save_local={}",
-        dims.size_string(),
+        "image generate ratio={} size={size_tier} seed={seed} inputs={} save_local={}",
+        req.ratio.label(),
         parsed.len(),
         req.save_local
     );
@@ -48,7 +50,7 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
     let input_record = json!({
         "prompt": req.prompt,
         "ratio": req.ratio.label(),
-        "size": dims.size_string(),
+        "size": size_tier,
         "seed": seed,
         "inputs": parsed,
         "resolved_inputs": resolved_inputs,
@@ -64,7 +66,8 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
     let body = ImageGenerationRequest {
         model: api.config.image_model.clone(),
         prompt: req.prompt.clone(),
-        size: dims.size_string(),
+        ratio: req.ratio.label(),
+        size: size_tier.to_string(),
         extra_body: Some(extra),
     };
 
@@ -95,7 +98,7 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
             let result = GenerationResult {
                 kind: "image".into(),
                 ratio: req.ratio.label(),
-                size: dims.size_string(),
+                size: size_tier.to_string(),
                 uri: path.display().to_string(),
                 asset_uri: None,
                 generation_id: None,
@@ -132,7 +135,7 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
         remote_url.clone()
     };
 
-    finish_image_result(api, req, dims.size_string(), uri, remote_url, input_record)
+    finish_image_result(api, req, size_tier.to_string(), uri, remote_url, input_record)
 }
 
 fn finish_image_result(

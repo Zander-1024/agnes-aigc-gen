@@ -405,6 +405,7 @@ impl DashboardApp {
         let handle = spawn_job(JobRequest::Image(ImageJobParams {
             prompt: self.image_form.prompt.text(),
             ratio,
+            size_tier: self.image_form.size_tier_value(),
             inputs: self.image_form.inputs.raw_values(),
             count: self.image_form.count_value(),
             seed: self.image_form.seed_value(),

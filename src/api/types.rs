@@ -15,6 +15,7 @@ pub struct ImageDataItem {
 pub struct ImageGenerationRequest {
     pub model: String,
     pub prompt: String,
+    pub ratio: String,
     pub size: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<ExtraBodyImage>,
@@ -98,6 +99,20 @@ fn push_unique(ids: &mut Vec<String>, id: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_generation_request_serializes_ratio_and_size_tier() {
+        let body = ImageGenerationRequest {
+            model: "agnes-image-2.1-flash".into(),
+            prompt: "test".into(),
+            ratio: "16:9".into(),
+            size: "2K".into(),
+            extra_body: None,
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["ratio"], "16:9");
+        assert_eq!(json["size"], "2K");
+    }
 
     #[test]
     fn video_task_query_id_prefers_video_id() {

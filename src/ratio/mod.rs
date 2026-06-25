@@ -57,16 +57,51 @@ impl AspectRatio {
     }
 }
 
-/// Image output sizes (1K tier).
-static IMAGE_RATIO_PRESETS: LazyLock<HashMap<&'static str, Dimensions>> = LazyLock::new(|| {
-    HashMap::from([
-        ("1:1", Dimensions::new(1024, 1024)),
-        ("4:3", Dimensions::new(1152, 864)),
-        ("3:4", Dimensions::new(864, 1152)),
-        ("16:9", Dimensions::new(1280, 720)),
-        ("9:16", Dimensions::new(720, 1280)),
-    ])
-});
+/// Supported image aspect ratios (wire values for API `ratio` field).
+static IMAGE_SUPPORTED_RATIOS: &[&str] = &["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"];
+
+/// Image resolution tiers (wire values for API `size` field).
+static IMAGE_RESOLUTION_TIERS: &[&str] = &["1K", "2K", "3K", "4K"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageResolutionTier {
+    #[default]
+    K1,
+    K2,
+    K3,
+    K4,
+}
+
+impl ImageResolutionTier {
+    pub const DEFAULT: Self = Self::K1;
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "1k" => Ok(Self::K1),
+            "2k" => Ok(Self::K2),
+            "3k" => Ok(Self::K3),
+            "4k" => Ok(Self::K4),
+            other => bail!("unsupported image size {other:?}, supported: {}", image_tier_labels()),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::K1 => "1K",
+            Self::K2 => "2K",
+            Self::K3 => "3K",
+            Self::K4 => "4K",
+        }
+    }
+}
+
+fn image_tier_labels() -> String {
+    IMAGE_RESOLUTION_TIERS.join(", ")
+}
+
+fn image_ratio_labels() -> String {
+    IMAGE_SUPPORTED_RATIOS.join(", ")
+}
 
 /// Video output sizes (720p tier, shortest edge 768, multiples of 64).
 static VIDEO_RATIO_PRESETS: LazyLock<HashMap<&'static str, Dimensions>> = LazyLock::new(|| {
@@ -81,12 +116,6 @@ static VIDEO_RATIO_PRESETS: LazyLock<HashMap<&'static str, Dimensions>> = LazyLo
 
 fn lookup_preset(presets: &HashMap<&'static str, Dimensions>, ratio: &AspectRatio) -> Option<Dimensions> {
     presets.get(ratio.label().as_str()).copied()
-}
-
-fn supported_labels(presets: &HashMap<&'static str, Dimensions>) -> String {
-    let mut keys: Vec<_> = presets.keys().copied().collect();
-    keys.sort_unstable();
-    keys.join(", ")
 }
 
 /// One selectable aspect ratio with resolved pixel dimensions (for UI pickers).
@@ -104,7 +133,6 @@ pub struct RatioCatalog {
     pub tier: &'static str,
 }
 
-pub const IMAGE_RESOLUTION_TIER: &str = "1K";
 pub const VIDEO_RESOLUTION_TIER: &str = "720p";
 
 fn presets_to_options(presets: &HashMap<&'static str, Dimensions>, tier: &'static str) -> Vec<RatioOption> {
@@ -115,9 +143,17 @@ fn presets_to_options(presets: &HashMap<&'static str, Dimensions>, tier: &'stati
         .collect()
 }
 
-/// Supported image aspect ratios with 1K-tier dimensions.
+/// Supported image aspect ratios for UI pickers.
 pub fn image_ratio_options() -> Vec<RatioOption> {
-    presets_to_options(&IMAGE_RATIO_PRESETS, IMAGE_RESOLUTION_TIER)
+    IMAGE_SUPPORTED_RATIOS
+        .iter()
+        .map(|label| RatioOption { label: (*label).to_string(), dimensions: Dimensions::new(0, 0), tier: "" })
+        .collect()
+}
+
+/// Selectable image resolution tiers (`1K`–`4K`).
+pub fn image_resolution_tiers() -> &'static [&'static str] {
+    IMAGE_RESOLUTION_TIERS
 }
 
 /// Known video aspect ratios with 720p-tier dimensions.
@@ -136,18 +172,21 @@ pub fn video_timing_preview(duration_secs: f64, frame_rate: u32) -> Result<(u32,
 }
 
 pub fn ratio_option_display(option: &RatioOption) -> String {
-    format!("{} · {}", option.label, option.dimensions.size_string())
+    if option.dimensions.width == 0 && option.dimensions.height == 0 {
+        option.label.clone()
+    } else {
+        format!("{} · {}", option.label, option.dimensions.size_string())
+    }
 }
 
-/// Fixed image dimensions per supported aspect ratio.
-pub fn image_dimensions(ratio: &AspectRatio) -> Result<Dimensions> {
-    lookup_preset(&IMAGE_RATIO_PRESETS, ratio).with_context(|| {
-        format!(
-            "unsupported image ratio {}, supported: {}",
-            ratio.label(),
-            supported_labels(&IMAGE_RATIO_PRESETS)
-        )
-    })
+/// Validate image aspect ratio against the API-supported whitelist.
+pub fn validate_image_ratio(ratio: &AspectRatio) -> Result<()> {
+    let label = ratio.label();
+    if IMAGE_SUPPORTED_RATIOS.contains(&label.as_str()) {
+        Ok(())
+    } else {
+        bail!("unsupported image ratio {label}, supported: {}", image_ratio_labels())
+    }
 }
 
 /// Video dimensions from preset table; unknown ratios snap to 64-multiple 720p tier.
@@ -234,26 +273,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_presets_from_map() {
-        assert_eq!(
-            image_dimensions(&AspectRatio { w: 1, h: 1 }).unwrap().size_string(),
-            "1024x1024"
-        );
-        assert_eq!(
-            image_dimensions(&AspectRatio { w: 16, h: 9 }).unwrap().size_string(),
-            "1280x720"
-        );
-        assert_eq!(IMAGE_RATIO_PRESETS.len(), 5);
+    fn image_ratio_whitelist() {
+        assert!(validate_image_ratio(&AspectRatio { w: 1, h: 1 }).is_ok());
+        assert!(validate_image_ratio(&AspectRatio { w: 21, h: 9 }).is_ok());
+        assert!(validate_image_ratio(&AspectRatio { w: 2, h: 3 }).is_ok());
+        assert!(validate_image_ratio(&AspectRatio { w: 5, h: 4 }).is_err());
+        assert_eq!(IMAGE_SUPPORTED_RATIOS.len(), 8);
     }
 
     #[test]
-    fn video_presets_differ_from_image() {
+    fn image_resolution_tier_parse() {
+        assert_eq!(ImageResolutionTier::K2.as_str(), "2K");
+        assert_eq!(ImageResolutionTier::parse("1k").unwrap(), ImageResolutionTier::K1);
+        assert_eq!(ImageResolutionTier::parse("2K").unwrap(), ImageResolutionTier::K2);
+        assert_eq!(ImageResolutionTier::DEFAULT, ImageResolutionTier::K1);
+        assert!(ImageResolutionTier::parse("5k").is_err());
+        assert_eq!(image_resolution_tiers().len(), 4);
+    }
+
+    #[test]
+    fn video_presets_unchanged() {
         assert_eq!(video_dimensions(&AspectRatio { w: 1, h: 1 }).size_string(), "768x768");
         assert_eq!(video_dimensions(&AspectRatio { w: 16, h: 9 }).size_string(), "1280x768");
-        assert_ne!(
-            image_dimensions(&AspectRatio { w: 1, h: 1 }).unwrap(),
-            video_dimensions(&AspectRatio { w: 1, h: 1 })
-        );
         assert_eq!(VIDEO_RATIO_PRESETS.len(), 5);
     }
 
@@ -273,12 +314,9 @@ mod tests {
     #[test]
     fn ratio_option_catalog_lists_image_presets() {
         let options = image_ratio_options();
-        assert_eq!(options.len(), 5);
-        assert!(
-            options
-                .iter()
-                .any(|o| o.label == "1:1" && o.tier == IMAGE_RESOLUTION_TIER)
-        );
+        assert_eq!(options.len(), 8);
+        assert!(options.iter().any(|o| o.label == "1:1"));
+        assert!(options.iter().any(|o| o.label == "21:9"));
     }
 
     #[test]

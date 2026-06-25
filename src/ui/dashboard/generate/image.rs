@@ -9,9 +9,9 @@ use crate::ratio::{self, ratio_option_display};
 
 use super::fields::{IMAGE_FORM_HELP, InputList, SelectField, TextArea, TextInput, move_field_focus};
 use super::layout::{error_line, param_line, render_media_panel, render_params_panel, render_text_box};
-use super::preview::{build_image_preview, default_ratio_index, ratio_from_index};
+use super::preview::{build_image_preview, default_ratio_index, ratio_from_index, size_tier_from_index};
 
-pub const IMAGE_PARAM_COUNT: usize = 5;
+pub const IMAGE_PARAM_COUNT: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ImageSection {
@@ -24,6 +24,7 @@ pub struct ImageForm {
     pub prompt: TextArea,
     pub ratio: SelectField,
     pub ratio_options: Vec<ratio::RatioOption>,
+    pub size: SelectField,
     pub count: SelectField,
     pub seed: TextInput,
     pub inputs: InputList,
@@ -41,11 +42,16 @@ impl ImageForm {
         let ratio_options = ratio::image_ratio_options();
         let ratio_labels: Vec<String> = ratio_options.iter().map(ratio_option_display).collect();
         let ratio_index = default_ratio_index(&ratio_options, "1:1");
+        let size_labels: Vec<String> = ratio::image_resolution_tiers()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         let count_labels: Vec<String> = (1..=MAX_IMAGE_BATCH_COUNT).map(|n| n.to_string()).collect();
         Self {
             prompt: TextArea::new(),
             ratio: SelectField::new(ratio_labels, ratio_index),
             ratio_options,
+            size: SelectField::new(size_labels, 0),
             count: SelectField::new(count_labels, 0),
             seed: TextInput::empty(),
             inputs: InputList::new(),
@@ -75,6 +81,10 @@ impl ImageForm {
         self.section = ImageSection::Media;
         self.editing = false;
         self.inputs.adding = false;
+    }
+
+    pub fn size_tier_value(&self) -> ratio::ImageResolutionTier {
+        size_tier_from_index(self.size.index).unwrap_or(ratio::ImageResolutionTier::DEFAULT)
     }
 
     pub fn count_value(&self) -> u32 {
@@ -119,7 +129,7 @@ impl ImageForm {
                 }
                 ImageSection::Params if self.param_focus == IMAGE_PARAM_COUNT - 1 => ImageFormAction::Submit,
                 ImageSection::Params => {
-                    if self.param_focus == 3 {
+                    if self.param_focus == 4 {
                         self.save_local = !self.save_local;
                     } else {
                         self.editing = true;
@@ -152,7 +162,7 @@ impl ImageForm {
                 }
                 ImageFormAction::None
             }
-            crossterm::event::KeyCode::Char(' ') if self.section == ImageSection::Params && self.param_focus == 3 => {
+            crossterm::event::KeyCode::Char(' ') if self.section == ImageSection::Params && self.param_focus == 4 => {
                 self.save_local = !self.save_local;
                 ImageFormAction::None
             }
@@ -160,6 +170,8 @@ impl ImageForm {
                 if self.param_focus == 0 {
                     self.ratio.previous();
                 } else if self.param_focus == 1 {
+                    self.size.previous();
+                } else if self.param_focus == 2 {
                     self.count.previous();
                 }
                 ImageFormAction::None
@@ -168,6 +180,8 @@ impl ImageForm {
                 if self.param_focus == 0 {
                     self.ratio.next();
                 } else if self.param_focus == 1 {
+                    self.size.next();
+                } else if self.param_focus == 2 {
                     self.count.next();
                 }
                 ImageFormAction::None
@@ -217,13 +231,13 @@ impl ImageForm {
             ImageSection::Params => match key {
                 crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Enter => self.editing = false,
                 crossterm::event::KeyCode::Char(c) if !c.is_control() => match self.param_focus {
-                    2 if self.count_value() == 1 => self.seed.push_char(c),
-                    4 => self.output_dir.push_char(c),
+                    3 if self.count_value() == 1 => self.seed.push_char(c),
+                    5 => self.output_dir.push_char(c),
                     _ => {}
                 },
                 crossterm::event::KeyCode::Backspace => match self.param_focus {
-                    2 if self.count_value() == 1 => self.seed.pop_char(),
-                    4 => self.output_dir.pop_char(),
+                    3 if self.count_value() == 1 => self.seed.pop_char(),
+                    5 => self.output_dir.pop_char(),
                     _ => {}
                 },
                 _ => {}
@@ -268,7 +282,7 @@ impl ImageForm {
         if self.count_value() > 1 && !self.seed.value.trim().is_empty() {
             self.field_error = Some("seed cannot be used with count > 1".into());
             self.section = ImageSection::Params;
-            self.param_focus = 2;
+            self.param_focus = 3;
             return Err(self.field_error.clone().unwrap());
         }
         if let Err(err) = ratio_from_index(&self.ratio_options, self.ratio.index) {
@@ -289,6 +303,7 @@ impl ImageForm {
         let preview = build_image_preview(
             &self.ratio_options,
             self.ratio.index,
+            self.size.index,
             self.inputs.items.len(),
             self.count_value(),
             &self.seed.value,
@@ -296,14 +311,14 @@ impl ImageForm {
         let pf = |i: usize| self.section == ImageSection::Params && self.param_focus == i;
         let seed_display = if self.count_value() > 1 {
             "(disabled with batch)".into()
-        } else if self.section == ImageSection::Params && self.editing && self.param_focus == 2 {
+        } else if self.section == ImageSection::Params && self.editing && self.param_focus == 3 {
             self.seed.display_with_cursor(true)
         } else if self.seed.value.trim().is_empty() {
             "random".into()
         } else {
             self.seed.value.clone()
         };
-        let out_display = if self.section == ImageSection::Params && self.editing && self.param_focus == 4 {
+        let out_display = if self.section == ImageSection::Params && self.editing && self.param_focus == 5 {
             self.output_dir.display_with_cursor(true)
         } else if self.output_dir.value.trim().is_empty() {
             "(config default)".into()
@@ -317,28 +332,25 @@ impl ImageForm {
                 self.section == ImageSection::Params,
                 self.ratio.current(),
             ),
-            param_line(
-                "Size",
-                pf(0),
-                self.section == ImageSection::Params,
-                &format!("{} ({})", preview.size, preview.tier),
-            ),
+            param_line("Size", pf(1), self.section == ImageSection::Params, self.size.current()),
             param_line(
                 "Count",
-                pf(1),
+                pf(2),
                 self.section == ImageSection::Params,
                 self.count.current(),
             ),
-            param_line("Seed", pf(2), self.section == ImageSection::Params, &seed_display),
+            param_line("Seed", pf(3), self.section == ImageSection::Params, &seed_display),
             param_line(
                 "Save",
-                pf(3),
+                pf(4),
                 self.section == ImageSection::Params,
                 if self.save_local { "[x] yes" } else { "[ ] no" },
             ),
-            param_line("Output", pf(4), self.section == ImageSection::Params, &out_display),
+            param_line("Output", pf(5), self.section == ImageSection::Params, &out_display),
         ];
-        if let Some(ref err) = self.field_error {
+        if let Some(ref err) = preview.error {
+            lines.push(error_line(err));
+        } else if let Some(ref err) = self.field_error {
             lines.push(error_line(err));
         }
         lines

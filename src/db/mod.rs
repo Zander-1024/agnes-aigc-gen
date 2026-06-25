@@ -452,7 +452,7 @@ mod tests {
     fn asset_roundtrip() {
         let db = open_mem();
         let asset = db
-            .insert_asset("image", "https://example.com/a.png", Some("1:1"), Some("1024x1024"))
+            .insert_asset("image", "https://example.com/a.png", Some("1:1"), Some("1K"))
             .unwrap();
         assert_eq!(
             db.resolve_reference(&asset.asset_uri).unwrap(),

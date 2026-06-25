@@ -88,7 +88,7 @@ mod batch_tests {
         let item = ImageBatchItem::from_result(GenerationResult {
             kind: "image".into(),
             ratio: "1:1".into(),
-            size: "1024x1024".into(),
+            size: "1K".into(),
             uri: "https://example.com/a.png".into(),
             asset_uri: Some("asset://abc".into()),
             generation_id: Some(1),

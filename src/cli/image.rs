@@ -7,7 +7,7 @@ use clap::Args;
 use crate::api::{ApiClient, ImageRequest, generate_image};
 use crate::config::AppConfig;
 use crate::output::{ImageBatchItem, MAX_IMAGE_BATCH_COUNT, OutputFormat, print_batch_results};
-use crate::ratio::AspectRatio;
+use crate::ratio::{AspectRatio, ImageResolutionTier};
 
 #[derive(Args)]
 pub struct ImageArgs {
@@ -18,6 +18,10 @@ pub struct ImageArgs {
     /// Aspect ratio (e.g. 16:9, 1:1, 4:3)
     #[arg(short = 'r', long = "ratio", default_value = "1:1")]
     pub ratio: String,
+
+    /// Output resolution tier (1K, 2K, 3K, 4K; case-insensitive)
+    #[arg(long = "size", default_value = "1K")]
+    pub size: String,
 
     /// Number of images to generate (concurrent API calls, max 4)
     #[arg(short = 'n', long = "count", default_value_t = 1)]
@@ -60,6 +64,7 @@ pub fn run(args: ImageArgs) -> Result<()> {
 
     let cfg = AppConfig::load()?;
     let ratio = AspectRatio::parse(&args.ratio)?;
+    let size_tier = ImageResolutionTier::parse(&args.size)?;
     let output_format = parse_output_format(&args.output_format)?;
 
     if args.count == 1 {
@@ -69,6 +74,7 @@ pub fn run(args: ImageArgs) -> Result<()> {
             ImageRequest {
                 prompt: args.prompt.clone(),
                 ratio,
+                size_tier,
                 inputs: args.inputs.clone(),
                 seed: args.seed,
                 output_dir: args.output_dir.clone(),
@@ -103,6 +109,7 @@ pub fn run(args: ImageArgs) -> Result<()> {
                         ImageRequest {
                             prompt,
                             ratio,
+                            size_tier,
                             inputs,
                             seed,
                             output_dir,

@@ -12,7 +12,7 @@ use crate::api::{
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::output::{ImageBatchItem, MAX_IMAGE_BATCH_COUNT, OutputFormat};
-use crate::ratio::{AspectRatio, validate_frame_rate};
+use crate::ratio::{AspectRatio, ImageResolutionTier, validate_frame_rate};
 
 pub fn default_agent_tools() -> Vec<Arc<dyn AgentTool>> {
     let mut tools: Vec<Arc<dyn AgentTool>> = pi_agent::tools::default_tools()
@@ -92,6 +92,7 @@ impl AgentTool for AgnesGenerateImageTool {
             "properties": {
                 "prompt": {"type": "string"},
                 "ratio": {"type": "string", "default": "1:1"},
+                "size": {"type": "string", "enum": ["1K", "2K", "3K", "4K"], "default": "1K"},
                 "inputs": {"type": "array", "items": {"type": "string"}, "default": []},
                 "count": {"type": "integer", "minimum": 1, "maximum": 4, "default": 1},
                 "seed": {"type": "integer", "minimum": 0, "maximum": 999},
@@ -251,6 +252,7 @@ where
 fn generate_image_tool(args: Value) -> Result<Value> {
     let prompt = required_str(&args, "prompt")?.to_string();
     let ratio = optional_str(&args, "ratio").unwrap_or("1:1");
+    let size = optional_str(&args, "size").unwrap_or("1K");
     let count = optional_u32(&args, "count").unwrap_or(1);
     anyhow::ensure!(
         (1..=MAX_IMAGE_BATCH_COUNT).contains(&count),
@@ -261,6 +263,7 @@ fn generate_image_tool(args: Value) -> Result<Value> {
     let inputs = optional_string_array(&args, "inputs")?;
     let save = optional_bool(&args, "save").unwrap_or(false);
     let ratio = AspectRatio::parse(ratio)?;
+    let size_tier = ImageResolutionTier::parse(size)?;
     let cfg = AppConfig::load()?;
     let mut results = Vec::new();
     for _ in 0..count {
@@ -270,6 +273,7 @@ fn generate_image_tool(args: Value) -> Result<Value> {
             ImageRequest {
                 prompt: prompt.clone(),
                 ratio: ratio.clone(),
+                size_tier,
                 inputs: inputs.clone(),
                 seed,
                 output_dir: None,

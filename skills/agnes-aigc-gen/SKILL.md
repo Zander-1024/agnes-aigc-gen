@@ -18,8 +18,8 @@ CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 
 | Rule | Detail |
 |------|--------|
-| **Never pass `--size`** | Use `--ratio` only |
-| **Image ratios** | Only `1:1`, `4:3`, `3:4`, `16:9`, `9:16` |
+| **Image ratios** | `1:1`, `3:4`, `4:3`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9` |
+| **Image size** | `--size` `1K` / `2K` / `3K` / `4K` (default `1K`; max `4K`; case-insensitive on CLI) |
 | **Image inputs** | Local path, HTTPS URL, `asset://`, base64, **data URI** (i2i) |
 | **Video inputs** | **HTTPS URL or `asset://` only** — no local path, base64, or data URI |
 | **Video images** | `-i` / `--image` only (not `--input`, `--first-frame`, `--keyframes`) |
@@ -47,6 +47,7 @@ Every option has a **long form** (`--prompt`, `--ratio`, …). Short forms (`-p`
 |---------|-------|------|
 | image | `-p` | `--prompt` |
 | image | `-r` | `--ratio` |
+| image | | `--size` |
 | image | `-n` | `--count` |
 | image | `-s` | `--seed` |
 | image | `-i` | `--input` |
@@ -152,21 +153,33 @@ Default `base_url`: `https://apihub.agnes-ai.com/v1`.
 ## Image generation
 
 ```bash
-agnes-aigc-gen image -p "A cat on the beach" --ratio 16:9
+agnes-aigc-gen image -p "A cat on the beach" --ratio 16:9 --size 2K
 agnes-aigc-gen image -p "Make it cyberpunk" --ratio 9:16 -i ./photo.png
 agnes-aigc-gen image -p "portrait" --ratio 9:16 -n 4
 agnes-aigc-gen image -p "fixed look" --ratio 1:1 -s 42
 ```
 
-### Ratios & sizes
+### Ratios & resolution
 
-| Ratio | Size |
-|-------|------|
-| `1:1` | 1024×1024 |
-| `4:3` | 1152×864 |
-| `3:4` | 864×1152 |
-| `16:9` | 1280×720 |
-| `9:16` | 720×1280 |
+| Ratio | Notes |
+|-------|-------|
+| `1:1` | Square |
+| `3:4` | Portrait |
+| `4:3` | Landscape |
+| `16:9` | Widescreen |
+| `9:16` | Vertical video / stories |
+| `2:3` | Portrait |
+| `3:2` | Landscape |
+| `21:9` | Ultrawide |
+
+| `--size` | Meaning |
+|----------|---------|
+| `1K` | Default resolution |
+| `2K` | Higher resolution |
+| `3K` | Higher resolution |
+| `4K` | Maximum resolution |
+
+CLI accepts `1k` / `1K` interchangeably; API wire value is always uppercase.
 
 ### Batch (`-n` / `--count` 2–4)
 
@@ -189,6 +202,7 @@ Single image: top-level object (no `results` wrapper).
 |------|---------|-------|
 | `-p` / `--prompt` | required | |
 | `-r` / `--ratio` | `1:1` | Supported ratio |
+| `--size` | `1K` | Resolution tier (`1K`–`4K`) |
 | `-n` / `--count` | `1` | Max 4; exclusive with `--seed` |
 | `-s` / `--seed` | random | 0–999; sent in `extra_body.seed` |
 | `-i` / `--input` | — | Repeatable; URL, path, data URI, `asset://` |

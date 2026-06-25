@@ -65,3 +65,4 @@ Pushing a new `v*` tag triggers [`.github/workflows/release.yml`](.github/workfl
 | `src/db/` | SQLite assets, generations, video_tasks |
 | `skills/agnes-aigc-gen/` | Cursor/agent skill |
 | `docs/agnes-*.md` | API reference copies |
+| `local/` | Gitignored local notes and scratch files (never commit) |

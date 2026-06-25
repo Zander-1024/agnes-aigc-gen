@@ -5,8 +5,9 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::api::{ApiClient, ImageRequest, generate_image};
+use crate::cli::util::parse_output_format;
 use crate::config::AppConfig;
-use crate::output::{ImageBatchItem, MAX_IMAGE_BATCH_COUNT, OutputFormat, print_batch_results};
+use crate::output::{ImageBatchItem, MAX_IMAGE_BATCH_COUNT, print_batch_results};
 use crate::ratio::{AspectRatio, ImageResolutionTier};
 
 #[derive(Args)]
@@ -142,12 +143,4 @@ pub fn run(args: ImageArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn parse_output_format(s: &str) -> Result<OutputFormat> {
-    match s.to_lowercase().as_str() {
-        "json" => Ok(OutputFormat::Json),
-        "plain" => Ok(OutputFormat::Plain),
-        other => anyhow::bail!("unknown output format: {other}"),
-    }
 }

@@ -1,3 +1,5 @@
+mod util;
+
 mod chat;
 mod dashboard;
 mod history;

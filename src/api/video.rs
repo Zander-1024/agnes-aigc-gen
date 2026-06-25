@@ -7,8 +7,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::api::ApiClient;
+use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::image::resolve_image_seed;
-use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoTaskResponse};
+use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoStatus, VideoTaskResponse};
 use crate::db::VideoTaskRecord;
 use crate::logging;
 use crate::media::input::ImageInput;
@@ -50,9 +51,62 @@ pub struct VideoTaskSubmitResult {
     pub phase: String,
 }
 
+/// Output-side parameters for polling an existing task and recording the result.
+#[derive(Debug, Clone)]
+pub struct FinalizeOutput {
+    pub prompt: String,
+    pub ratio_label: String,
+    pub size: String,
+    pub save_local: bool,
+    pub output_dir: Option<String>,
+    pub max_retries: Option<u32>,
+    pub output_format: OutputFormat,
+    pub quiet: bool,
+    pub input_record: Option<serde_json::Value>,
+}
+
+impl FinalizeOutput {
+    pub fn from_request(
+        req: &VideoRequest,
+        ratio_label: String,
+        size: String,
+        input_record: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            prompt: req.prompt.clone(),
+            ratio_label,
+            size,
+            save_local: req.save_local,
+            output_dir: req.output_dir.clone(),
+            max_retries: req.max_retries,
+            output_format: req.output_format,
+            quiet: req.quiet,
+            input_record,
+        }
+    }
+
+    pub fn for_wait(save_local: bool, output_format: OutputFormat) -> Self {
+        Self {
+            prompt: String::new(),
+            ratio_label: "-".into(),
+            size: "-".into(),
+            save_local,
+            output_dir: None,
+            max_retries: None,
+            output_format,
+            quiet: false,
+            input_record: None,
+        }
+    }
+}
+
 pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationResult> {
     if let Some(ref query_id) = req.task_id {
-        return poll_and_finalize(api, query_id, &req, None);
+        return poll_and_finalize(
+            api,
+            query_id,
+            &FinalizeOutput::from_request(&req, "-".into(), "-".into(), None),
+        );
     }
 
     let (num_frames, actual_duration) = resolve_video_timing(req.duration, req.frame_rate)?;
@@ -132,7 +186,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
 
     api.db.insert_video_task(
         &query_id,
-        &created.status,
+        created.status.as_str(),
         Some(&req.prompt),
         Some(&input_record),
         created.progress,
@@ -144,7 +198,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
             id: record.id,
             is_async: true,
             task_id: query_id.clone(),
-            status: created.status.clone(),
+            status: created.status.to_string(),
             phase: VideoTaskRecord::phase_from_status(&created.status).to_string(),
         };
         if !req.quiet {
@@ -160,7 +214,11 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         });
     }
 
-    poll_and_finalize(api, &query_id, &req, Some(input_record))
+    poll_and_finalize(
+        api,
+        &query_id,
+        &FinalizeOutput::from_request(&req, req.ratio.label(), dims.size_string(), Some(input_record)),
+    )
 }
 
 fn print_submit_result(result: &VideoTaskSubmitResult, format: OutputFormat) -> Result<()> {
@@ -255,28 +313,12 @@ pub fn wait_video_task(
     save_local: bool,
     output_format: OutputFormat,
 ) -> Result<GenerationResult> {
-    let req = VideoRequest {
-        prompt: String::new(),
-        negative_prompt: None,
-        seed: None,
-        ratio: AspectRatio { w: 16, h: 9 },
-        duration: 5.0,
-        frame_rate: 24,
-        images: vec![],
-        task_id: Some(query_id.to_string()),
-        async_mode: false,
-        output_dir: None,
-        save_local,
-        max_retries: None,
-        output_format,
-        quiet: false,
-    };
-    poll_and_finalize(api, query_id, &req, None)
+    poll_and_finalize(api, query_id, &FinalizeOutput::for_wait(save_local, output_format))
 }
 
 fn persist_task_from_response(api: &ApiClient, query_id: &str, task: &VideoTaskResponse) -> Result<VideoTaskRecord> {
     let remote = task.result_url();
-    let asset_id = if task.status == "completed" {
+    let asset_id = if task.status == VideoStatus::Completed {
         if let Some(ref url) = remote {
             resolve_or_create_video_asset(api, query_id, url)?
         } else {
@@ -289,7 +331,7 @@ fn persist_task_from_response(api: &ApiClient, query_id: &str, task: &VideoTaskR
     match api.db.get_video_task(query_id) {
         Ok(_) => api.db.update_video_task(
             query_id,
-            &task.status,
+            task.status.as_str(),
             task.progress,
             remote.as_deref(),
             asset_id.as_deref(),
@@ -297,10 +339,10 @@ fn persist_task_from_response(api: &ApiClient, query_id: &str, task: &VideoTaskR
         ),
         Err(_) => {
             api.db
-                .insert_video_task(query_id, &task.status, None, None, task.progress)?;
+                .insert_video_task(query_id, task.status.as_str(), None, None, task.progress)?;
             api.db.update_video_task(
                 query_id,
-                &task.status,
+                task.status.as_str(),
                 task.progress,
                 remote.as_deref(),
                 asset_id.as_deref(),
@@ -342,19 +384,20 @@ pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskRespo
         }
         let task: VideoTaskResponse = resp.json().context("parse video task")?;
         let _ = persist_task_from_response(api, query_id, &task);
-        match task.status.as_str() {
-            "completed" => {
+        match &task.status {
+            VideoStatus::Completed => {
                 log::debug!("video query {query_id} completed");
                 return Ok(task);
             }
-            "failed" => {
+            VideoStatus::Failed => {
                 log::debug!("video query {query_id} failed: {:?}", task.error);
                 bail!("video task failed: {:?}", task.error);
             }
             status => {
                 let wait = poll_interval(started.elapsed());
                 log::debug!(
-                    "video query {query_id} status={status}, next poll in {}s",
+                    "video query {query_id} status={}, next poll in {}s",
+                    status,
                     wait.as_secs()
                 );
                 thread::sleep(wait);
@@ -363,44 +406,15 @@ pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskRespo
     }
 }
 
-fn poll_and_finalize(
-    api: &ApiClient,
-    query_id: &str,
-    req: &VideoRequest,
-    input_record: Option<serde_json::Value>,
-) -> Result<GenerationResult> {
+fn poll_and_finalize(api: &ApiClient, query_id: &str, output: &FinalizeOutput) -> Result<GenerationResult> {
     let task = retry(api.config.max_retries, || poll_video_task(api, query_id))?;
     let remote = task.result_url().context("completed task missing video url")?;
 
-    let save_local = req.save_local;
-    let max_retries = req.max_retries.unwrap_or(api.config.max_retries);
-
-    let (dims, ratio_label) = if req.task_id.is_some() && req.images.is_empty() {
-        (video_dimensions(&req.ratio), req.ratio.label())
-    } else if !req.images.is_empty() {
-        let inputs_raw = parse_image_inputs(&req.images)?;
-        let resolved: Vec<String> = inputs_raw
-            .iter()
-            .map(|s| api.db.resolve_reference(s))
-            .collect::<Result<_>>()?;
-        let (dims, _) = video_frame_urls(&resolved, &api.client)?;
-        let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
-        let mut dim_list = Vec::new();
-        for input in &classified {
-            let bytes = load_image_bytes(input, &api.client)?;
-            dim_list.push(image_dimensions_from_bytes(&bytes)?);
-        }
-        ensure_same_ratio(&dim_list)?;
-        let ratio = AspectRatio::from_dimensions(dim_list[0].0, dim_list[0].1);
-        (dims, ratio.label())
-    } else {
-        (video_dimensions(&req.ratio), req.ratio.label())
-    };
-
-    let uri = if save_local {
+    let max_retries = output.max_retries.unwrap_or(api.config.max_retries);
+    let uri = if output.save_local {
         log::debug!("downloading video to local output dir");
         let output_dir = api.config.resolved_output_dir()?;
-        let out_dir = req
+        let out_dir = output
             .output_dir
             .as_ref()
             .map(|d| crate::config::expand_tilde(d))
@@ -413,45 +427,44 @@ fn poll_and_finalize(
         remote.clone()
     };
 
-    let asset = api
+    let _ = api
         .db
-        .insert_asset("video", &remote, Some(&ratio_label), Some(&dims.size_string()))?;
+        .update_video_task(query_id, task.status.as_str(), task.progress, Some(&remote), None, None);
 
-    let _ = api.db.update_video_task(
-        query_id,
-        "completed",
-        task.progress,
-        Some(&remote),
-        Some(&asset.id),
-        None,
-    );
-
-    let mut result = GenerationResult {
-        kind: "video".into(),
-        ratio: ratio_label,
-        size: dims.size_string(),
-        uri,
-        asset_uri: Some(asset.asset_uri),
-        generation_id: None,
+    let prompt = if output.prompt.is_empty() {
+        None
+    } else {
+        Some(output.prompt.as_str())
     };
+    let deliver_options = DeliverOptions { output_format: output.output_format, quiet: output.quiet };
 
-    if let Some(input) = input_record {
-        let output_record = serde_json::to_value(&result).context("serialize output")?;
-        let gen_id = api
-            .db
-            .insert_generation("video", Some(&req.prompt), &input, &output_record, Some(&asset.id))?;
-        result.generation_id = Some(gen_id);
+    let result = deliver_generation(
+        api,
+        DeliverPayload {
+            kind: "video",
+            prompt,
+            ratio: &output.ratio_label,
+            size: &output.size,
+            remote_url: &remote,
+            uri,
+            input_record: output.input_record.as_ref(),
+        },
+        &deliver_options,
+    )?;
+
+    if let Some(asset_uri) = &result.asset_uri
+        && let Some(id) = asset_uri.strip_prefix("asset://")
+    {
+        let _ = api.db.update_video_task(
+            query_id,
+            task.status.as_str(),
+            task.progress,
+            Some(&remote),
+            Some(id),
+            None,
+        );
     }
 
-    log::debug!(
-        "recorded asset={} generation_id={:?}",
-        result.asset_uri.as_deref().unwrap_or("-"),
-        result.generation_id
-    );
-
-    if !req.quiet {
-        result.print(req.output_format)?;
-    }
     Ok(result)
 }
 

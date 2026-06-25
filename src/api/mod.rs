@@ -1,5 +1,6 @@
+mod deliver;
 mod image;
-mod types;
+pub mod types;
 mod video;
 
 pub use image::{ImageRequest, generate_image};

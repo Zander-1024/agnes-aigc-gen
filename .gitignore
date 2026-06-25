@@ -2,6 +2,9 @@
 **/*.rs.bk
 .DS_Store
 
+# Local-only notes and scratch (not versioned)
+/local/
+
 *.log
 
 # image video

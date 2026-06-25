@@ -13,6 +13,7 @@ use crate::cli::list_tui::{
     LIST_HELP_TEXT, buffer_to_string, copy_to_clipboard_silent, detail_field_tabs_line, detail_value_display,
     parse_list_key, render_detail_panel, render_help_line, truncate_display,
 };
+use crate::cli::util::non_empty_value;
 use crate::db::{AssetRecord, Database};
 
 #[derive(Args)]
@@ -378,13 +379,6 @@ fn asset_table_row(row: &AssetRecord) -> Row<'static> {
         Cell::from(row.ratio.clone().unwrap_or_else(|| "-".into())),
         Cell::from(truncate_display(&row.remote_url, 64)),
     ])
-}
-
-fn non_empty_value(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
-    })
 }
 
 #[cfg(test)]

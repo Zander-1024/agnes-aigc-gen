@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -6,6 +7,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::api::types::VideoStatus;
 use crate::config::AppConfig;
 
 pub struct Database {
@@ -60,12 +62,16 @@ pub struct VideoTaskRecord {
 }
 
 impl VideoTaskRecord {
-    pub fn phase_from_status(status: &str) -> &'static str {
+    pub fn phase_from_status(status: &VideoStatus) -> &'static str {
         match status {
-            "completed" => "success",
-            "failed" => "failed",
-            _ => "processing",
+            VideoStatus::Completed => "success",
+            VideoStatus::Failed => "failed",
+            VideoStatus::Queued | VideoStatus::InProgress | VideoStatus::Unknown(_) => "processing",
         }
+    }
+
+    pub fn phase_from_status_str(status: &str) -> &'static str {
+        Self::phase_from_status(&VideoStatus::from_str(status).unwrap_or_else(|never| match never {}))
     }
 }
 
@@ -412,7 +418,7 @@ fn map_video_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoTaskReco
     Ok(VideoTaskRecord {
         id: row.get(0)?,
         task_id: row.get(1)?,
-        phase: VideoTaskRecord::phase_from_status(&status).to_string(),
+        phase: VideoTaskRecord::phase_from_status_str(&status).to_string(),
         status,
         prompt: row.get(3)?,
         input_json: row.get::<_, Option<String>>(4)?.map(parse_json_col).transpose()?,
@@ -458,6 +464,15 @@ mod tests {
             db.resolve_reference(&asset.asset_uri).unwrap(),
             "https://example.com/a.png"
         );
+    }
+
+    #[test]
+    fn video_task_phase_unknown_status_is_processing() {
+        assert_eq!(
+            VideoTaskRecord::phase_from_status(&VideoStatus::Unknown("succeeded".into())),
+            "processing"
+        );
+        assert_eq!(VideoTaskRecord::phase_from_status(&VideoStatus::Completed), "success");
     }
 
     #[test]

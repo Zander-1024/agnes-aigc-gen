@@ -25,7 +25,7 @@ use assets::{AssetAction, AssetsView};
 use config::{ConfigAction, ConfigForm};
 use generate::fields::is_submit_key;
 use generate::image::{ImageForm, ImageFormAction};
-use generate::preview::ratio_from_index;
+use generate::preview::{default_ratio_index, ratio_from_index};
 use generate::video::{VideoForm, VideoFormAction};
 use home::HomeMenu;
 use jobs::{ImageJobParams, JobEvent, JobRequest, VideoJobParams, spawn_job};
@@ -37,6 +37,19 @@ const LIST_LIMIT: usize = 20;
 const TASK_REFRESH_FAST: Duration = Duration::from_secs(1);
 const TASK_REFRESH_SLOW: Duration = Duration::from_secs(5);
 const OUTPUT_PANEL_HEIGHT: u16 = 7;
+
+fn begin_job_submit(
+    job_rx: &Option<UnboundedReceiver<JobEvent>>,
+    result: &mut ResultPanel,
+    status: &mut String,
+) -> bool {
+    if job_rx.is_some() {
+        *status = "Job already running".into();
+        result.set_error("A job is already running — wait for Output panel");
+        return false;
+    }
+    true
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -378,10 +391,7 @@ impl DashboardApp {
         self.result.set_ack("Submit received — validating…");
         self.image_form.editing = false;
 
-        if self.job_rx.is_some() {
-            self.status = "Job already running".into();
-            self.result
-                .set_error("A job is already running — wait for Output panel");
+        if !begin_job_submit(&self.job_rx, &mut self.result, &mut self.status) {
             return;
         }
         if let Err(err) = self.image_form.validate() {
@@ -421,10 +431,7 @@ impl DashboardApp {
         self.result.set_ack("Submit received — validating…");
         self.video_form.editing = false;
 
-        if self.job_rx.is_some() {
-            self.status = "Job already running".into();
-            self.result
-                .set_error("A job is already running — wait for Output panel");
+        if !begin_job_submit(&self.job_rx, &mut self.result, &mut self.status) {
             return;
         }
         if let Err(err) = self.video_form.validate() {
@@ -437,7 +444,16 @@ impl DashboardApp {
         }
         self.result.clear_error();
         let ratio = if self.video_form.ratio_disabled() {
-            crate::ratio::AspectRatio::parse("16:9").expect("16:9")
+            match ratio_from_index(
+                &self.video_form.ratio_options,
+                default_ratio_index(&self.video_form.ratio_options, "16:9"),
+            ) {
+                Ok(r) => r,
+                Err(err) => {
+                    self.status = format!("{err:#}");
+                    return;
+                }
+            }
         } else {
             match ratio_from_index(&self.video_form.ratio_options, self.video_form.ratio.index) {
                 Ok(r) => r,

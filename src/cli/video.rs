@@ -3,8 +3,8 @@ use clap::Args;
 
 use crate::api::{ApiClient, VideoRequest, generate_video};
 use crate::cli::task::resolve_task_ref;
+use crate::cli::util::parse_output_format;
 use crate::config::AppConfig;
-use crate::output::OutputFormat;
 use crate::ratio::{AspectRatio, max_video_duration, resolve_video_timing, validate_frame_rate};
 
 #[derive(Args)]
@@ -64,11 +64,7 @@ pub fn run(args: VideoArgs) -> Result<()> {
 
     let cfg = AppConfig::load()?;
     let ratio = AspectRatio::parse(&args.ratio)?;
-    let output_format = match args.output_format.to_lowercase().as_str() {
-        "json" => OutputFormat::Json,
-        "plain" => OutputFormat::Plain,
-        other => anyhow::bail!("unknown output format: {other}"),
-    };
+    let output_format = parse_output_format(&args.output_format)?;
 
     let prompt = match (&args.prompt, &args.task_id) {
         (Some(p), _) => p.clone(),

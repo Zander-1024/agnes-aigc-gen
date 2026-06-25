@@ -2,10 +2,11 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 
 use crate::api::ApiClient;
+use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::types::{ExtraBodyImage, ImageGenerationRequest, ImageGenerationResponse};
 use crate::logging;
 use crate::media::{classify_input, parse_image_inputs, resolve_for_api};
-use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url, write_base64_file};
+use crate::output::{OutputFormat, download_with_retry, infer_ext_from_url, write_base64_file};
 use crate::ratio::{AspectRatio, ImageResolutionTier, validate_image_ratio};
 
 pub struct ImageRequest {
@@ -22,9 +23,10 @@ pub struct ImageRequest {
     pub quiet: bool,
 }
 
-pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationResult> {
+pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<crate::output::GenerationResult> {
     validate_image_ratio(&req.ratio)?;
     let size_tier = req.size_tier.as_str();
+    let ratio_label = req.ratio.label();
     let parsed = parse_image_inputs(&req.inputs)?;
     let mut resolved_inputs = Vec::new();
     let mut image_urls = Vec::new();
@@ -36,10 +38,10 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
     }
 
     let seed = resolve_image_seed(req.seed)?;
+    let deliver_options = DeliverOptions { output_format: req.output_format, quiet: req.quiet };
 
     log::debug!(
-        "image generate ratio={} size={size_tier} seed={seed} inputs={} save_local={}",
-        req.ratio.label(),
+        "image generate ratio={ratio_label} size={size_tier} seed={seed} inputs={} save_local={}",
         parsed.len(),
         req.save_local
     );
@@ -49,7 +51,7 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
 
     let input_record = json!({
         "prompt": req.prompt,
-        "ratio": req.ratio.label(),
+        "ratio": ratio_label,
         "size": size_tier,
         "seed": seed,
         "inputs": parsed,
@@ -66,7 +68,7 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
     let body = ImageGenerationRequest {
         model: api.config.image_model.clone(),
         prompt: req.prompt.clone(),
-        ratio: req.ratio.label(),
+        ratio: ratio_label.clone(),
         size: size_tier.to_string(),
         extra_body: Some(extra),
     };
@@ -82,52 +84,37 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
 
     let item = parsed.data.first().context("empty image response")?;
     let max_retries = req.max_retries.unwrap_or(api.config.max_retries);
+    let size = size_tier.to_string();
 
     let remote_url = if let Some(url) = &item.url {
         url.clone()
     } else if let Some(b64) = &item.b64_json {
-        if req.save_local {
-            let output_dir = api.config.resolved_output_dir()?;
-            let out_dir = req
-                .output_dir
-                .as_ref()
-                .map(|d| crate::config::expand_tilde(d))
-                .transpose()?
-                .unwrap_or(output_dir);
-            let path = write_base64_file(&out_dir, b64, "png")?;
-            let result = GenerationResult {
-                kind: "image".into(),
-                ratio: req.ratio.label(),
-                size: size_tier.to_string(),
-                uri: path.display().to_string(),
-                asset_uri: None,
-                generation_id: None,
-            };
-            let output_record = serde_json::to_value(&result)?;
-            let gen_id = api
-                .db
-                .insert_generation("image", Some(&req.prompt), &input_record, &output_record, None)?;
-            let mut result = result;
-            result.generation_id = Some(gen_id);
-            if !req.quiet {
-                result.print(req.output_format)?;
-            }
-            return Ok(result);
+        if !req.save_local {
+            bail!("image response returned base64 only; use --save to write locally");
         }
-        bail!("image response returned base64 only; use --save to write locally");
+        let out_dir = resolve_output_dir(api, req.output_dir.as_deref())?;
+        let path = write_base64_file(&out_dir, b64, "png")?;
+        let uri = path.display().to_string();
+        return deliver_generation(
+            api,
+            DeliverPayload {
+                kind: "image",
+                prompt: Some(&req.prompt),
+                ratio: &ratio_label,
+                size: &size,
+                remote_url: &uri,
+                uri: uri.clone(),
+                input_record: Some(&input_record),
+            },
+            &deliver_options,
+        );
     } else {
         bail!("image response missing url and b64_json");
     };
 
     let uri = if req.save_local {
         log::debug!("downloading image to local output dir");
-        let output_dir = api.config.resolved_output_dir()?;
-        let out_dir = req
-            .output_dir
-            .as_ref()
-            .map(|d| crate::config::expand_tilde(d))
-            .transpose()?
-            .unwrap_or(output_dir);
+        let out_dir = resolve_output_dir(api, req.output_dir.as_deref())?;
         let ext = infer_ext_from_url(&remote_url, "png");
         let path = download_with_retry(&api.client, &remote_url, &out_dir, &ext, max_retries)?;
         path.display().to_string()
@@ -135,48 +122,27 @@ pub fn generate_image(api: &ApiClient, req: ImageRequest) -> Result<GenerationRe
         remote_url.clone()
     };
 
-    finish_image_result(api, req, size_tier.to_string(), uri, remote_url, input_record)
+    deliver_generation(
+        api,
+        DeliverPayload {
+            kind: "image",
+            prompt: Some(&req.prompt),
+            ratio: &ratio_label,
+            size: &size,
+            remote_url: &remote_url,
+            uri,
+            input_record: Some(&input_record),
+        },
+        &deliver_options,
+    )
 }
 
-fn finish_image_result(
-    api: &ApiClient,
-    req: ImageRequest,
-    size: String,
-    uri: String,
-    remote_url: String,
-    input_record: serde_json::Value,
-) -> Result<GenerationResult> {
-    let asset = api
-        .db
-        .insert_asset("image", &remote_url, Some(&req.ratio.label()), Some(&size))?;
-
-    let result = GenerationResult {
-        kind: "image".into(),
-        ratio: req.ratio.label(),
-        size,
-        uri,
-        asset_uri: Some(asset.asset_uri.clone()),
-        generation_id: None,
-    };
-
-    let output_record = serde_json::to_value(&result).context("serialize output")?;
-    let gen_id = api.db.insert_generation(
-        "image",
-        Some(&req.prompt),
-        &input_record,
-        &output_record,
-        Some(&asset.id),
-    )?;
-
-    let mut result = result;
-    result.generation_id = Some(gen_id);
-
-    log::debug!("recorded asset={} generation_id={gen_id}", asset.asset_uri);
-
-    if !req.quiet {
-        result.print(req.output_format)?;
-    }
-    Ok(result)
+fn resolve_output_dir(api: &ApiClient, override_dir: Option<&str>) -> Result<std::path::PathBuf> {
+    let output_dir = api.config.resolved_output_dir()?;
+    Ok(override_dir
+        .map(crate::config::expand_tilde)
+        .transpose()?
+        .unwrap_or(output_dir))
 }
 
 /// Seed for image generation: explicit 0–999, or random perturbation in that range.

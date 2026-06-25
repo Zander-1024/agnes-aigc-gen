@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-25
+
+### Added
+
+- Image API `ratio` field and resolution tiers `--size` (`1K`–`4K`, default `1K`)
+- Eight supported image ratios: `1:1`, `3:4`, `4:3`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`
+- Dashboard size-tier selector for image generation
+
+### Changed
+
+- Image `size` is sent to the API as uppercase tier (`1K`–`4K`), not computed WxH
+- CLI, agent tool, SKILL, and API docs updated for ratio + size tiers
+
 ## [0.4.1] - 2026-06-06
 
 ### Added

@@ -29,6 +29,14 @@ use crate::cli::ChatArgs;
 use crate::config::AppConfig;
 use crate::db::Database;
 
+mod skill_meta;
+mod style_bridge;
+mod wrap;
+
+use skill_meta::skill_description_from_markdown;
+use style_bridge::convert_core_style;
+use wrap::{wrap_prefixed, wrap_styled_line, wrap_text};
+
 #[derive(Debug, Clone)]
 pub struct ChatUiOptions {
     pub resume: Option<String>,
@@ -1219,65 +1227,6 @@ fn list_skill_summaries() -> Vec<SkillSummary> {
         .collect()
 }
 
-fn skill_description_from_markdown(text: &str) -> Option<String> {
-    let mut lines = text.lines();
-    if lines.next()? != "---" {
-        return first_body_line(text);
-    }
-    while let Some(line) = lines.next() {
-        if line == "---" {
-            break;
-        }
-        if let Some(value) = line.strip_prefix("description:") {
-            let value = value.trim();
-            if matches!(value, ">-" | ">" | "|-" | "|") {
-                let folded = collect_folded_yaml_value(&mut lines);
-                if !folded.is_empty() {
-                    return Some(folded);
-                }
-            } else if let Some(description) = yaml_scalar(value) {
-                return Some(description);
-            }
-        }
-    }
-    let body = lines.collect::<Vec<_>>().join("\n");
-    first_body_line(&body)
-}
-
-fn collect_folded_yaml_value<'a>(lines: &mut impl Iterator<Item = &'a str>) -> String {
-    let mut parts = Vec::new();
-    for line in lines.by_ref() {
-        if line == "---" {
-            break;
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        if line.starts_with(' ') || line.starts_with('\t') {
-            parts.push(line.trim());
-        } else {
-            break;
-        }
-    }
-    parts.join(" ")
-}
-
-fn yaml_scalar(value: &str) -> Option<String> {
-    let value = value.trim().trim_matches('"').trim_matches('\'').trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
-fn first_body_line(text: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#') && *line != "---")
-        .map(|line| line.to_string())
-}
-
 fn load_skill_context(name: &str) -> Result<String> {
     let (_, path) = list_available_skills()
         .into_iter()
@@ -1771,41 +1720,6 @@ fn render_user_bubble(text: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn convert_core_color(color: ratatui_core::style::Color) -> Color {
-    use ratatui_core::style::Color as C;
-    match color {
-        C::Reset => Color::Reset,
-        C::Black => Color::Black,
-        C::Red => Color::Red,
-        C::Green => Color::Green,
-        C::Yellow => Color::Yellow,
-        C::Blue => Color::Blue,
-        C::Magenta => Color::Magenta,
-        C::Cyan => Color::Cyan,
-        C::Gray => Color::Gray,
-        C::DarkGray => Color::DarkGray,
-        C::LightRed => Color::LightRed,
-        C::LightGreen => Color::LightGreen,
-        C::LightYellow => Color::LightYellow,
-        C::LightBlue => Color::LightBlue,
-        C::LightMagenta => Color::LightMagenta,
-        C::LightCyan => Color::LightCyan,
-        C::White => Color::White,
-        C::Rgb(r, g, b) => Color::Rgb(r, g, b),
-        C::Indexed(i) => Color::Indexed(i),
-    }
-}
-
-fn convert_core_style(style: ratatui_core::style::Style) -> Style {
-    Style {
-        fg: style.fg.map(convert_core_color),
-        bg: style.bg.map(convert_core_color),
-        add_modifier: Modifier::from_bits_truncate(style.add_modifier.bits()),
-        sub_modifier: Modifier::from_bits_truncate(style.sub_modifier.bits()),
-        ..Style::default()
-    }
-}
-
 fn render_assistant_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     let md = tui_markdown::from_str(text);
     let mut out = Vec::new();
@@ -1838,90 +1752,11 @@ fn render_styled_prefixed(prefix: &str, text: &str, width: usize, style: Style) 
         .collect()
 }
 
-fn wrap_styled_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
-    if line.width() <= width {
-        return vec![line];
-    }
-    let plain: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
-    wrap_text(&plain, width).into_iter().map(Line::from).collect()
-}
-
 fn intro_text(state: &ChatUiState) -> String {
     format!(
         "Welcome to Agnes Chat.\n\nAsk for code changes, image generation, async video tasks, asset/history lookup, or skill loading.\n\nTab completes slash commands. /retry or Ctrl-R retries the previous request without adding another user message to the session. Ctrl-T toggles thinking visibility. Ctrl-E toggles tool details. Current approval mode: {}.",
         state.approval_label
     )
-}
-
-fn wrap_prefixed(prefix: &str, text: &str, width: usize) -> Vec<String> {
-    let available = width.saturating_sub(prefix.chars().count()).max(8);
-    let wrapped = wrap_text(text, available);
-    let indent = " ".repeat(prefix.chars().count());
-    wrapped
-        .into_iter()
-        .enumerate()
-        .map(|(idx, line)| {
-            if idx == 0 {
-                format!("{prefix}{line}")
-            } else {
-                format!("{indent}{line}")
-            }
-        })
-        .collect()
-}
-
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut out = Vec::new();
-    for raw_line in text.lines() {
-        if raw_line.is_empty() {
-            out.push(String::new());
-            continue;
-        }
-        let mut line = String::new();
-        for word in raw_line.split_whitespace() {
-            let word_len = word.chars().count();
-            let line_len = line.chars().count();
-            if line.is_empty() {
-                if word_len <= width {
-                    line.push_str(word);
-                } else {
-                    out.extend(split_long_word(word, width));
-                }
-            } else if line_len + 1 + word_len <= width {
-                line.push(' ');
-                line.push_str(word);
-            } else {
-                out.push(line);
-                line = String::new();
-                if word_len <= width {
-                    line.push_str(word);
-                } else {
-                    out.extend(split_long_word(word, width));
-                }
-            }
-        }
-        if !line.is_empty() {
-            out.push(line);
-        }
-    }
-    out
-}
-
-fn split_long_word(word: &str, width: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for ch in word.chars() {
-        if current.chars().count() >= width {
-            chunks.push(current);
-            current = String::new();
-        }
-        current.push(ch);
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
 }
 
 fn status_line(state: &ChatUiState) -> String {
@@ -2106,23 +1941,6 @@ mod tests {
                 .iter()
                 .any(|line| line.text.contains("agnes-aigc-gen") && line.text.contains("Generates images and videos"))
         );
-    }
-
-    #[test]
-    fn skill_description_parses_folded_front_matter() {
-        let text = "---\nname: demo\ndescription: >-\n  Does one thing.\n  Also does another.\n---\n# Demo\n";
-
-        assert_eq!(
-            skill_description_from_markdown(text).as_deref(),
-            Some("Does one thing. Also does another.")
-        );
-    }
-
-    #[test]
-    fn wraps_long_text_to_available_width() {
-        let wrapped = wrap_text("one two three four five", 9);
-
-        assert_eq!(wrapped, vec!["one two", "three", "four five"]);
     }
 
     #[test]

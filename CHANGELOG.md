@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
 ### Added
 
 - Text-model image understanding through `chat -i/--image` with image URLs, local files, Base64, and Data URIs.
@@ -21,6 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Replace the video frame-count API with 4–12 second durations, resolution tiers, and text/keyframe/reference modes, including audio/video references.
 - Poll with the model recorded for each task and read completed video URLs from the current response format.
 - Refresh model references, CLI examples, and existing-config migration instructions; remove old video frame-rate and negative-prompt options.
+
+### Migration
+
+- Saved configuration is preserved. Select `agnes-3.0-flash`, `agnes-image-2.5-flash`, and `agnes-video-2.5` (or `agnes-video-2.5-flash`) explicitly when upgrading an existing installation; see `docs/SETUP.md`.
+- Video duration is now an integer from 4 to 12 seconds. Replace old frame-rate and negative-prompt arguments with the current mode, size, and reference-media parameters.
+- Refresh the installed agent skill along with the binary using `agnes-aigc-gen self update --update-skill`.
 
 ## [0.4.2] - 2026-06-25
 

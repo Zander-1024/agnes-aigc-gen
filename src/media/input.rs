@@ -15,9 +15,19 @@ pub enum ImageInput {
 pub fn parse_image_inputs(values: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for value in values {
-        for part in value.split(',') {
-            let part = part.trim();
-            if !part.is_empty() {
+        let mut parts = value.split(',').map(str::trim);
+        while let Some(part) = parts.next() {
+            if part.is_empty() {
+                continue;
+            }
+            if part.starts_with("data:") || part.starts_with("base64:data:") {
+                // A Base64 Data URI contains one header separator; its payload has no commas.
+                let payload = parts
+                    .next()
+                    .context("data URI requires a comma followed by a Base64 payload")?;
+                anyhow::ensure!(!payload.is_empty(), "data URI requires a non-empty Base64 payload");
+                out.push(format!("{part},{payload}"));
+            } else {
                 out.push(part.to_string());
             }
         }
@@ -79,6 +89,54 @@ fn decode_data_uri_bytes(uri: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageBuffer, ImageFormat};
+
+    #[test]
+    fn data_uri_survives_input_parsing_and_reaches_image_conversion() {
+        let mut png = Vec::new();
+        DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let data_uri = format!("data:image/png;base64,{}", B64.encode(png));
+        for raw in [data_uri.clone(), format!("base64:{data_uri}")] {
+            let inputs = parse_image_inputs(&[raw]).unwrap();
+            assert_eq!(inputs.len(), 1);
+            let output = resolve_for_api(&classify_input(&inputs[0]), &Client::new()).unwrap();
+            let bytes = decode_data_uri_bytes(&output).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((image.width(), image.height()), (2, 3));
+        }
+    }
+
+    #[test]
+    fn mixed_comma_lists_and_repeated_inputs_preserve_data_uris() {
+        let inputs = parse_image_inputs(&[
+            " https://example.com/a.png, data:image/jpeg;base64,YWJj,asset://example ".into(),
+            "base64:data:image/png;base64,ZGVm, ./photo.png".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            inputs,
+            [
+                "https://example.com/a.png",
+                "data:image/jpeg;base64,YWJj",
+                "asset://example",
+                "base64:data:image/png;base64,ZGVm",
+                "./photo.png"
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_data_uris_fail_instead_of_becoming_missing_references() {
+        for value in [
+            "data:image/jpeg;base64",
+            "data:image/jpeg;base64,",
+            "base64:data:image/png;base64, ,https://example.com/image.png",
+        ] {
+            assert!(parse_image_inputs(&[value.into()]).is_err(), "{value}");
+        }
+        assert!(parse_image_inputs(&[" , ".into()]).unwrap().is_empty());
+    }
 
     #[test]
     fn local_png_converts_to_jpeg_data_uri() {

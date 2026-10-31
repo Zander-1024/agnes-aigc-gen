@@ -13,6 +13,8 @@
 | `extra_body.image` | 编辑／合成的参考图片数组；公共 URL 或 Data URI |
 | `extra_body.response_format` | CLI 请求 `url`；接口也支持 `b64_json` |
 
+参考图片可直接传 `data:image/png;base64,...` 或 `data:image/jpeg;base64,...`。直接调用 API 时使用完整 Data URI；CLI 的 `image -i` 还接受裸 Base64，并负责转换。
+
 官网参数表也列出顶层 `image`；本项目采用详细说明和编辑示例中的 `extra_body.image` 写法。`response_format` 放在 `extra_body` 内。
 
 ```json

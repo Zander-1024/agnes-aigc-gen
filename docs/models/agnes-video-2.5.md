@@ -26,7 +26,7 @@
 | `keyframe` | `first_frame`／`last_frame` 至少一个；不与参考数组混用 |
 | `reference` | `images`、`audios`、`videos` 至少一类非空；不与首尾帧混用 |
 
-媒体必须为服务可访问的公共 URL。`videos` 中的对象包含 `url`，可选非负 `start_seconds` 和布尔 `require_audio`。图片最多 8 张，音频最多 3 段，视频最多 1 个，总文件数最多 12。图片单张 <15 MB、总计 <50 MB、宽高各 256–5760；音频单段 <15 MB、总计 <64 MB、总时长 2–12 秒；视频 <50 MB、2–12 秒、24–60 FPS。CLI 校验模式与数量，文件规格由服务校验。
+媒体必须为服务可访问的公共 URL。官网未约定 Base64／Data URI 输入；CLI 对首尾帧、参考图片、音频和视频均只接受 HTTPS URL 或能解析到 HTTPS URL 的 `asset://`，不直接传本地文件或 Base64。`videos` 中的对象包含 `url`，可选非负 `start_seconds` 和布尔 `require_audio`。图片最多 8 张，音频最多 3 段，视频最多 1 个，总文件数最多 12。图片单张 <15 MB、总计 <50 MB、宽高各 256–5760；音频单段 <15 MB、总计 <64 MB、总时长 2–12 秒；视频 <50 MB、2–12 秒、24–60 FPS。CLI 校验模式与数量，文件规格由服务校验。
 
 ```json
 {

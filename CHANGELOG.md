@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the comma inside image Base64 Data URIs when parsing input lists; reject missing payloads before generation.
+
 ### Changed
 
 - Default to Agnes 3.0 Flash (512K chat context), Image 2.5 Flash, and Video 2.5; add Video 2.5 Flash selection.

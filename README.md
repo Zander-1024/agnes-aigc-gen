@@ -1,12 +1,12 @@
 # agnes-aigc-gen
 
-CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) image and video generation.
+CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) text chat, image generation, and video generation.
 
 ## Features
 
-- **Image generation** — text-to-image and image-to-image (`agnes-image-2.1-flash`)
-- **Video generation** — text-to-video, image-to-video, multi-image (`agnes-video-v2.0`, async poll)
-- **Aspect ratios** — `--ratio` for aspect; `--size` for resolution tier (`1K`–`4K`, default `1K`)
+- **Image generation** — text-to-image and image-to-image (`agnes-image-2.5-flash`)
+- **Video generation** — text-to-video, image-to-video, keyframe and reference modes (`agnes-video-2.5` / `agnes-video-2.5-flash`, async poll)
+- **Aspect ratios and resolution** — `--ratio` for aspect; image `--size` `1K`–`4K`, video `--size` `720P` / `1080P` / `1K` / `2K`
 - **Batch images** — `-n` / `--count` 1–4 concurrent calls with partial-failure JSON
 - **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
 - **Asset history** — SQLite `asset://` references for image → video workflows
@@ -79,10 +79,10 @@ API key is encrypted in `{config_dir}/config.toml`. Full setup: [docs/SETUP.md](
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `base_url` | `https://apihub.agnes-ai.com/v1` | Official Agnes API gateway |
-| `text_model` | `agnes-2.0-flash` | Chat model |
+| `text_model` | `agnes-3.0-flash` | Chat model |
 | `thinking_text_model` | unset | Optional thinking model; falls back to `text_model` |
 | `chat_thinking` | `true` | Default chat thinking mode |
-| `chat_context_tokens` | `262144` | Chat context window |
+| `chat_context_tokens` | `524288` | Chat context window |
 | `chat_max_output_tokens` | `65536` | Chat max output |
 | `output_dir` | `.` | Used with `--save` only |
 
@@ -100,14 +100,15 @@ agnes-aigc-gen image -p "Cyberpunk style" --ratio 1:1 -i a.png,b.jpg
 # Batch (2–4 concurrent); do not combine with --seed
 agnes-aigc-gen image -p "portrait variants" --ratio 9:16 -n 4
 
-# Video (text-to-video)
-agnes-aigc-gen video -p "Cinematic walk" --ratio 16:9 -d 5
+# Video (text-to-video; default Agnes Video 2.5)
+agnes-aigc-gen video -p "Cinematic walk" --ratio 16:9 -d 5 --size 1080P
+
+# Flash (720P only)
+agnes-aigc-gen video --model agnes-video-2.5-flash -p "Ocean waves" -d 5
 
 # Image → video: generate first, then pass asset:// (HTTPS URL only for -i)
 agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
-agnes-aigc-gen video -p "Subtle motion" -d 3 \
-  --negative-prompt "blurry, watermark" \
-  -i asset://<id-from-json>
+agnes-aigc-gen video -p "Subtle motion" -d 5 -i asset://<id-from-json>
 
 # Version and update
 agnes-aigc-gen -v
@@ -149,12 +150,13 @@ Video does not upload local files or call the image API to stage frames. Generat
 
 | Topic | Rule |
 |-------|------|
-| Ratios | `1:1`, `4:3`, `3:4`, `16:9`, `9:16` |
+| Image ratios | `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9` |
+| Video ratios | `1:1`, `4:3`, `3:4`, `16:9`, `9:16`, `21:9` |
 | Image seed | `-s` / `--seed`, 0–999; mutually exclusive with `-n > 1` |
-| Video seed | `-s` / `--seed`, 0–999; only sent when set |
-| Video duration | max `floor(441 / frame_rate)` seconds (18s @ 24 fps) |
-| Video frame rate | `-f` / `--frame-rate`, 1–60 (default 24) |
-| Negative prompt | `--np` / `--negative-prompt` on video (top-level API field) |
+| Video seed | `-s` / `--seed`, unsigned integer; only sent when set |
+| Video duration | `-d` / `--duration`, integer 4–12 seconds (default 5) |
+| Video size | `720P`, `1080P`, `1K`, `2K`; Flash: `720P` only |
+| Video modes | `text`, `keyframe`, `reference`; inferred from media when omitted |
 | Video async | `--async` submits task and returns local `id` + vendor `task_id`; use `task list` / `task show 3` |
 
 ### Agent chat
@@ -183,15 +185,16 @@ See `agnes-aigc-gen --help`, [SKILL.md](skills/agnes-aigc-gen/SKILL.md) (usage),
 
 ## API reference docs
 
-Local copies of the Agnes official docs (Chinese, for reference):
+Integration notes checked against the [official documentation](https://wiki.agnes-ai.com/zh-Hans/docs/overview) on 2026-10-31:
 
 | Doc | Model |
 |-----|-------|
-| [docs/agnes-image-2.1-flash.md](docs/agnes-image-2.1-flash.md) | Image |
-| [docs/agnes-video-v2.0.md](docs/agnes-video-v2.0.md) | Video |
-| [docs/agnes-2.0-flash.md](docs/agnes-2.0-flash.md) | Text (chat) |
+| [Image 2.5 Flash](docs/models/agnes-image-2.5-flash.md) | `agnes-image-2.5-flash` |
+| [Video 2.5](docs/models/agnes-video-2.5.md) | `agnes-video-2.5` |
+| [Video 2.5 Flash](docs/models/agnes-video-2.5-flash.md) | `agnes-video-2.5-flash` |
+| [Text 3.0 Flash](docs/models/agnes-3.0-flash.md) | `agnes-3.0-flash` |
 
-Source: [agnes-ai.com/doc](https://agnes-ai.com/doc)
+Existing saved model settings remain in effect after upgrading. See [model migration](docs/SETUP.md#upgrading-model-settings) to select the current models. Agnes 3.0 Pro is listed as coming soon; the current text default is 3.0 Flash.
 
 ## Output
 

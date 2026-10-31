@@ -155,7 +155,7 @@ mod tests {
 
         assert!(runtime.enable_thinking);
         assert_eq!(runtime.model.id, cfg.text_model);
-        assert_eq!(runtime.model.context_window, 262_144);
+        assert_eq!(runtime.model.context_window, 524_288);
         assert_eq!(runtime.model.max_tokens, 65_536);
         assert_eq!(runtime.stream.max_tokens, Some(65_536));
     }

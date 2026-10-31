@@ -88,32 +88,36 @@ pub struct ExtraBodyImage {
     pub seed: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VideoReference {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seconds: Option<f64>,
+    #[serde(default)]
+    pub require_audio: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct VideoCreateRequest {
     pub model: String,
     pub prompt: String,
+    pub mode: String,
+    pub seconds: String,
+    pub size: String,
+    pub aspect_ratio: String,
+    pub n: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
+    pub first_frame: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub height: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub num_frames: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frame_rate: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub negative_prompt: Option<String>,
+    pub last_frame: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub audios: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub videos: Vec<VideoReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra_body: Option<ExtraBodyVideo>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExtraBodyVideo {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,9 +129,8 @@ pub struct VideoTaskResponse {
     pub status: VideoStatus,
     #[serde(default)]
     pub progress: Option<i32>,
-    pub video_url: Option<String>,
-    #[serde(default)]
-    pub remixed_from_video_id: Option<String>,
+    #[serde(alias = "video_url")]
+    pub url: Option<String>,
     pub error: Option<serde_json::Value>,
 }
 
@@ -141,7 +144,7 @@ impl VideoTaskResponse {
     }
 
     pub fn result_url(&self) -> Option<String> {
-        self.video_url.clone().or_else(|| self.remixed_from_video_id.clone())
+        self.url.clone()
     }
 }
 
@@ -161,7 +164,7 @@ mod tests {
     #[test]
     fn image_generation_request_serializes_ratio_and_size_tier() {
         let body = ImageGenerationRequest {
-            model: "agnes-image-2.1-flash".into(),
+            model: "agnes-image-2.5-flash".into(),
             prompt: "test".into(),
             ratio: "16:9".into(),
             size: "2K".into(),
@@ -194,6 +197,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(task.query_ids(), ["task_123"]);
+    }
+
+    #[test]
+    fn completed_video_reads_top_level_url_and_ignores_source_id() {
+        let mut value = serde_json::json!({
+            "id": "task_123",
+            "status": "completed",
+            "progress": 100,
+            "internal_status": "pending",
+            "url": "https://example.com/result.mp4",
+            "remixed_from_video_id": "video_source"
+        });
+        let task: VideoTaskResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/result.mp4"));
+        value.as_object_mut().unwrap().remove("url");
+        let task: VideoTaskResponse = serde_json::from_value(value).unwrap();
+        assert!(task.result_url().is_none());
     }
 
     #[test]

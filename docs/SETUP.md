@@ -190,27 +190,43 @@ Created/updated by `agnes-aigc-gen config set …`. Do not hand-edit `api_key_en
 
 ```toml
 base_url = "https://apihub.agnes-ai.com/v1"
-text_model = "agnes-2.0-flash"
-image_model = "agnes-image-2.1-flash"
-video_model = "agnes-video-v2.0"
+text_model = "agnes-3.0-flash"
+image_model = "agnes-image-2.5-flash"
+video_model = "agnes-video-2.5"
 output_dir = "."
 save_local = false
 max_retries = 3
 api_key_encrypted = "<base64 ciphertext; machine-bound>"
 ```
 
+### Upgrading model settings
+
+Upgrading the binary preserves saved model names and token limits. To use the current defaults with an existing config:
+
+```bash
+agnes-aigc-gen config set text-model agnes-3.0-flash
+agnes-aigc-gen config set thinking-text-model ""
+agnes-aigc-gen config set chat-context-tokens 512k
+agnes-aigc-gen config set image-model agnes-image-2.5-flash
+agnes-aigc-gen config set video-model agnes-video-2.5
+```
+
+Use `video-model agnes-video-2.5-flash` to make Flash the video default, or `video --model agnes-video-2.5-flash ...` for one request. Flash supports only `720P`; ordinary 2.5 also supports `1080P`, `1K`, and `2K`. Both accept integer durations from 4 to 12 seconds. The current video client uses the 2.5 API; select a 2.5 model before creating new tasks.
+
+Text chat uses Agnes 3.0 Flash. Agnes 3.0 Pro is announced as coming soon and is not the default.
+
 ### Fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `base_url` | `https://apihub.agnes-ai.com/v1` | API gateway |
-| `text_model` | `agnes-2.0-flash` | Chat model |
+| `text_model` | `agnes-3.0-flash` | Chat model |
 | `thinking_text_model` | (none) | Optional thinking chat model; fallback to `text_model` |
 | `chat_thinking` | `true` | Default chat thinking mode |
-| `chat_context_tokens` | `262144` | Chat context window (`256k`) |
+| `chat_context_tokens` | `524288` | Chat context window (`512k`) |
 | `chat_max_output_tokens` | `65536` | Chat max output (`64k`) |
-| `image_model` | `agnes-image-2.1-flash` | Image model |
-| `video_model` | `agnes-video-v2.0` | Video model |
+| `image_model` | `agnes-image-2.5-flash` | Image model |
+| `video_model` | `agnes-video-2.5` | Video model |
 | `output_dir` | `.` | Base dir for `--save` downloads |
 | `save_local` | `false` | Legacy; does **not** auto-download CLI output |
 | `max_retries` | `3` | HTTP retries |

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use reqwest::blocking::Client;
 
@@ -49,19 +49,6 @@ fn looks_like_base64(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
 }
 
-pub fn load_image_bytes(input: &ImageInput, client: &Client) -> Result<Vec<u8>> {
-    match input {
-        ImageInput::Url(url) => {
-            let resp = client.get(url).send().context("fetch image url")?;
-            let bytes = resp.bytes().context("read image url body")?;
-            Ok(bytes.to_vec())
-        }
-        ImageInput::Base64(b64) => B64.decode(b64).context("decode base64 image"),
-        ImageInput::DataUri(uri) => decode_data_uri_bytes(uri),
-        ImageInput::LocalPath(path) => std::fs::read(path).with_context(|| format!("read local image {path}")),
-    }
-}
-
 pub fn resolve_for_api(input: &ImageInput, _client: &Client) -> Result<String> {
     match input {
         ImageInput::Url(url) => Ok(url.clone()),
@@ -86,36 +73,6 @@ pub fn resolve_for_api(input: &ImageInput, _client: &Client) -> Result<String> {
 fn decode_data_uri_bytes(uri: &str) -> Result<Vec<u8>> {
     let payload = uri.split_once(',').map(|(_, data)| data).context("parse data URI")?;
     B64.decode(payload).context("decode data URI base64")
-}
-
-pub fn image_dimensions_from_bytes(bytes: &[u8]) -> Result<(u32, u32)> {
-    let img = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .context("guess image format")?
-        .decode()
-        .context("decode image")?;
-    Ok((img.width(), img.height()))
-}
-
-pub fn ensure_same_ratio(all_dims: &[(u32, u32)]) -> Result<()> {
-    if all_dims.len() <= 1 {
-        return Ok(());
-    }
-    let first = crate::ratio::AspectRatio::from_dimensions(all_dims[0].0, all_dims[0].1);
-    for &(w, h) in &all_dims[1..] {
-        let r = crate::ratio::AspectRatio::from_dimensions(w, h);
-        if r != first {
-            bail!(
-                "all input images must share the same aspect ratio; \
-                 first={}:{} found {}:{}",
-                first.w,
-                first.h,
-                r.w,
-                r.h
-            );
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

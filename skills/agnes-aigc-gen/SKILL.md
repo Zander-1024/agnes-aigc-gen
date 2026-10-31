@@ -12,7 +12,7 @@ description: >-
 CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 
 > **Install & config:** see [SETUP.md](./SETUP.md) in this directory.
-> **API reference:** see `docs/agnes-image-2.1-flash.md`, `docs/agnes-video-v2.0.md` in the repo root.
+> **API reference:** in the repository, read `docs/models/agnes-image-2.5-flash.md` for image parameters, `docs/models/agnes-video-2.5.md` and `docs/models/agnes-video-2.5-flash.md` for video modes and limits, or `docs/models/agnes-3.0-flash.md` for text chat. Installed skills can use the official links in **Models & endpoints**.
 
 ## Quick checklist (before every call)
 
@@ -22,13 +22,14 @@ CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 | **Image size** | `--size` `1K` / `2K` / `3K` / `4K` (default `1K`; max `4K`; case-insensitive on CLI) |
 | **Image inputs** | Local path, HTTPS URL, `asset://`, base64, **data URI** (i2i) |
 | **Video inputs** | **HTTPS URL or `asset://` only** — no local path, base64, or data URI |
-| **Video images** | `-i` / `--image` only (not `--input`, `--first-frame`, `--keyframes`) |
+| **Video media** | `-i` / `--image`, `--first-frame`, `--last-frame`, `--audio`, `--video`; public HTTPS URLs or image `asset://` |
 | **Batch `-n`** | Image only, **1–4**, concurrent; **mutually exclusive with `--seed`** |
 | **Image seed** | `-s` / `--seed`, **0–999** or omit (random per call) |
-| **Video seed** | `-s` / `--seed`, **0–999** or omit (not sent to API) |
+| **Video seed** | `-s` / `--seed`, unsigned integer or omit (not sent to API) |
 | **Default `uri`** | Remote HTTPS URL; `--save` for local file |
-| **Video max duration** | `floor(441 / frame_rate)`; 24 fps → max **18s** |
-| **Video `frame_rate`** | **1–60** (default 24) |
+| **Video duration** | Integer **4–12 seconds**, default 5 |
+| **Video size** | `720P` / `1080P` / `1K` / `2K`; Flash accepts **720P only** |
+| **Video model** | Default `agnes-video-2.5`; `--model agnes-video-2.5-flash` selects Flash |
 | **Video prompt** | Required unless `--task-id` |
 | **Chain i2v** | Generate image first → use `asset_uri` as `-i asset://<id>` |
 | **Version** | Global `-v` / `-V` prints version and exits |
@@ -52,12 +53,12 @@ Every option has a **long form** (`--prompt`, `--ratio`, …). Short forms (`-p`
 | image | `-s` | `--seed` |
 | image | `-i` | `--input` |
 | video | `-p` | `--prompt` |
-| video | `--np` | `--negative-prompt` |
 | video | `-s` | `--seed` |
 | video | `-r` | `--ratio` |
 | video | `-d` | `--duration` |
-| video | `-f` | `--frame-rate` |
 | video | `-i` | `--image` |
+| video | | `--model`, `--mode`, `--size` |
+| video | | `--first-frame`, `--last-frame`, `--audio`, `--video` |
 
 ## Global flags
 
@@ -146,7 +147,7 @@ Default `base_url`: `https://apihub.agnes-ai.com/v1`.
 2. Image: local `-i` paths exist if used
 3. Video: every `-i` resolves to an HTTPS URL (`asset://` or direct URL)
 4. `asset://` ids from prior runs on **this** machine
-5. Video: allow minutes for poll; use `-v` to monitor
+5. Video: allow minutes for poll; use `--verbose` to monitor
 
 ---
 
@@ -214,73 +215,72 @@ Single image: top-level object (no `results` wrapper).
 ## Video generation
 
 ```bash
-agnes-aigc-gen video -p "Ocean sunset" --ratio 16:9 -d 5
-agnes-aigc-gen video -p "Gentle motion" --ratio 9:16 -d 3 \
-  --negative-prompt "blurry, low quality, watermark" \
-  -i asset://c8d4eb63a84b
-agnes-aigc-gen video -p "Repeatable motion" -s 100 -d 5
-agnes-aigc-gen video --task-id video_xxxxxxxx
-agnes-aigc-gen video -p "Ocean sunset" --async   # returns local id + vendor query id
-agnes-aigc-gen task list                         # interactive TUI in a terminal
-agnes-aigc-gen task list --output-format json     # agent-friendly task records
-agnes-aigc-gen task show 3                        # local id (or vendor query id)
-agnes-aigc-gen task wait 3                         # poll until done
+agnes-aigc-gen video -p "Ocean sunset" --ratio 16:9 -d 5 --size 1080P
+agnes-aigc-gen video --model agnes-video-2.5-flash -p "Gentle motion" -i asset://c8d4eb63a84b -d 5
+agnes-aigc-gen video -p "Smooth transition" --first-frame https://example.com/start.png --last-frame https://example.com/end.png
+agnes-aigc-gen video -p "Use <Picture 1> and follow <Audio 1>" --mode reference -i https://example.com/person.png --audio https://example.com/beat.mp3
+agnes-aigc-gen video -p "Follow <Video 1>" --video '{"url":"https://example.com/motion.mp4","start_seconds":2,"require_audio":false}'
+agnes-aigc-gen video -p "Ocean sunset" --async
+agnes-aigc-gen task list --output-format json
+agnes-aigc-gen task show 3
+agnes-aigc-gen task wait 3
 ```
 
-**Video query ids:** Agnes now prefers `video_id` for result queries via `/agnesapi?video_id=...`. The legacy `task_id` path remains `/v1/videos/{task_id}`. The CLI stores the preferred vendor query id plus a local **`id`** (1, 2, 3…) in SQLite — use `task show 3` / `task wait 3` instead of the long vendor id.
+### Modes and limits
 
-### Input modes
+| Selection | API mode / fields |
+|-----------|-------------------|
+| No media | `text` |
+| One `-i` | `keyframe`, mapped to `first_frame` |
+| `--first-frame` and/or `--last-frame` | `keyframe`; at least one |
+| Multiple `-i`, or audio/video media | `reference`; `images`, `audios`, `videos` |
+| `--mode reference -i URL` | Single-image reference instead of first frame |
 
-| Images | API shape |
-|--------|-----------|
-| 0 | Text-to-video |
-| 1 | Image-to-video (`image` URL) |
-| 2+ | Multi-image (`extra_body.image` URLs; no `mode` set) |
+`text` takes no media. `keyframe` uses first/last frames, and `reference` uses media arrays; keep these fields within their mode. All media must resolve to publicly accessible HTTPS URLs. Images can use local `asset://` records that resolve to a remote URL. Output ratio is selected by `--ratio`; reference images may have different ratios.
 
-All frame URLs must share the same aspect ratio. CLI does **not** upload local files or call the image API to stage frames.
+| Limit | Video 2.5 | Video 2.5 Flash |
+|-------|-----------|-----------------|
+| Duration | Integer 4–12s | Integer 4–12s |
+| Size | `720P`, `1080P`, `1K`, `2K` | `720P` |
+| Reference images | Up to 8 | Up to 5 |
+| Reference audio clips | Up to 3 | Up to 3 |
+| Reference video clips | Up to 1 | Unsupported |
 
-### Duration limits
-
-`max_duration = floor(441 / frame_rate)` — e.g. **18s @ 24fps**. `num_frames` snapped to **8n+1** (≤ 441).
-
-### Polling
-
-| Elapsed | Interval |
-|---------|----------|
-| ≤ 2 min | 30s |
-| > 2 min | 15s |
-
-Wait for command to finish; queued tasks are normal. Use `--async` to submit without waiting; track with `task list` / `task show <id>` / `task wait <id>`.
-
-### Video async tasks
-
-| Command | Purpose |
-|---------|---------|
-| `video --async` | Submit task; JSON includes local `id` + vendor query id as `task_id` |
-| `task list [-n N]` | Last N tasks (refreshes **processing** from API); interactive TTY: table + **Detail** box (top row: Left/Right cycles QUERY ID/PROMPT/URI tabs; bottom row: value only, max 200 chars displayed); Enter copies **full** selected field; `q`/Esc exits |
-| `task list --output-format table` | Static table for non-interactive display; columns: ID, QUERY ID, PHASE, STATUS, PROGRESS, PROMPT, URI |
-| `task list --output-format json` | Agent-friendly JSON array, including `progress` |
-| `task show <ref>` | `<ref>` = local id (`3`, `#3`) or vendor query id |
-| `task wait <ref>` | Same as `video --task-id` (block until complete) |
-
-Vendor query id prefers Agnes `video_id` and uses the `/agnesapi` query endpoint. Legacy `id`/`task_id` responses are still accepted through `/v1/videos/{task_id}`. Local `id` is assigned by SQLite on submit.
+Video ratios: `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`. `1K` is fixed `1024x1024`; other pixel dimensions depend on model and ratio. The service validates file size, media duration, and encoding limits described in the API reference.
 
 ### Video flags
 
 | Flag | Default | Notes |
 |------|---------|-------|
 | `-p` / `--prompt` | required* | *Optional with `--task-id` |
-| `--np` / `--negative-prompt` | — | Top-level API field |
-| `-s` / `--seed` | omit | 0–999; top-level; only sent when set |
-| `-r` / `--ratio` | `16:9` | Used for t2v sizing |
-| `-d` / `--duration` | `5` | ≤ max duration |
-| `-f` / `--frame-rate` | `24` | **1–60** |
-| `-i` / `--image` | — | HTTPS URL or `asset://` only |
+| `--model` | configured `video_model` | `agnes-video-2.5` or `agnes-video-2.5-flash` |
+| `--mode` | inferred | `text`, `keyframe`, `reference` |
+| `--size` | `720P` | Flash only supports `720P` |
+| `-s` / `--seed` | omit | Unsigned integer; top-level API field |
+| `-r` / `--ratio` | `16:9` | Output aspect ratio |
+| `-d` / `--duration` | `5` | Integer 4–12 seconds |
+| `-i` / `--image` | — | Repeatable/comma-separated HTTPS URLs or `asset://` |
+| `--first-frame`, `--last-frame` | — | HTTPS URL or `asset://` |
+| `--audio` | — | Repeatable HTTPS audio URL |
+| `--video` | — | Repeatable HTTPS URL or JSON object with `url`, optional `start_seconds`, `require_audio` |
 | `--async` | off | Submit without polling |
-| `--task-id` | — | Poll existing task (sync) |
-| `--save` | off | |
+| `--task-id` | — | Poll existing task |
+| `--save` | off | Download result |
 
----
+### Async tasks and polling
+
+Creation returns Agnes `video_id`. The CLI prints it as `task_id` alongside SQLite local `id` (1, 2, 3…). Polling uses `/agnesapi?video_id=...&model_name=...`, with the model saved at task creation. Completion uses top-level `status`, `progress`, and result `url`.
+
+| Command | Purpose |
+|---------|---------|
+| `video --async` | Submit and return immediately |
+| `task list [-n N]` | Recent tasks; interactive TTY shows details and copies the selected field on Enter |
+| `task list --output-format json` | Agent-friendly task records |
+| `task list --output-format table` | Static task table |
+| `task show <ref>` | Local id (`3`, `#3`) or vendor query id |
+| `task wait <ref>` | Block until completed or failed |
+
+Use `--async` for generation that can take minutes; then follow the local task id. The client uses a conservative polling interval and retries transient failures.
 
 ## Workflow: image → video
 
@@ -288,10 +288,10 @@ Vendor query id prefers Agnes `video_id` and uses the `/agnesapi` query endpoint
 agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
 # → parse asset_uri from JSON
 
-agnes-aigc-gen --verbose video -p "Subtle motion" --ratio 9:16 -d 3 -i asset://<id>
+agnes-aigc-gen --verbose video -p "Subtle motion" --ratio 9:16 -d 5 -i asset://<id>
 ```
 
-Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Match ratio. `-d` ≤ 18 @ 24fps.
+Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Select the output ratio and a 4–12 second duration.
 
 ---
 
@@ -340,8 +340,9 @@ Model defaults:
 
 | Setting | Default |
 |---------|---------|
+| `text_model` | `agnes-3.0-flash` |
 | `chat_thinking` | `true` |
-| `chat_context_tokens` | `262144` (`256k`) |
+| `chat_context_tokens` | `524288` (`512k`) |
 | `chat_max_output_tokens` | `65536` (`64k`) |
 | `thinking_text_model` | fallback to `text_model` |
 
@@ -359,9 +360,12 @@ Video tool calls should use `agnes_submit_video`; it submits asynchronously and 
 
 | Type | Model | Endpoint |
 |------|-------|----------|
-| Chat | `agnes-2.0-flash` | `POST /v1/chat/completions` |
-| Image | `agnes-image-2.1-flash` | `POST /v1/images/generations` |
-| Video | `agnes-video-v2.0` | `POST /v1/videos` + poll |
+| Chat | [`agnes-3.0-flash`](https://wiki.agnes-ai.com/zh-Hans/docs/agnes-30-flash) | `POST /v1/chat/completions` |
+| Image | [`agnes-image-2.5-flash`](https://wiki.agnes-ai.com/zh-Hans/docs/agnes-image-25-flash) | `POST /v1/images/generations` |
+| Video | [`agnes-video-2.5`](https://wiki.agnes-ai.com/zh-Hans/docs/agnes-video-25) | `POST /v1/videos` + poll |
+| Video Flash | [`agnes-video-2.5-flash`](https://wiki.agnes-ai.com/zh-Hans/docs/agnes-video-25-flash) | `POST /v1/videos` + poll |
+
+Existing saved configs keep their model names. For an upgrade, follow **Upgrading model settings** in SETUP.md before creating new video tasks. Text defaults to 3.0 Flash (512K context); 3.0 Pro is coming soon.
 
 ---
 
@@ -375,18 +379,17 @@ Video tool calls should use `agnes_submit_video`; it submits asynchronously and 
 | `invalid ratio` | Use supported ratio |
 | `count must be 1–4` | Image `-n` only |
 | `--seed ... cannot be used with --count` | Drop `--seed` for batch, or use `-n 1` |
-| `frame_rate must be 1–60` | Fix `-f` / `--frame-rate` |
-| `duration ... exceeds maximum` | Reduce `-d` |
+| Invalid video duration/size/mode | Use integer 4–12s, the model’s supported size, and matching media fields |
 | `--prompt is required` | Add `-p` |
 | `asset not found` | Regenerate image; `asset list` |
 | Video: `unsupported input` / local path | Use `asset://` or HTTPS URL only |
-| Hung video | Wait; `-v` or `--task-id` |
+| Hung video | Wait; `--verbose` or `--task-id` |
 
 ---
 
 ## Invalid flags (do not use)
 
-`--size`, `--no-save`, `--first-frame`, `--keyframes`, `--input` on video, `-n` on video, `remote_url` in output, `config save-local` for downloads, `num_inference_steps`.
+`--frame-rate` / `-f`, `--negative-prompt` / `--np`, `--no-save`, `--keyframes`, `--input` on video, `-n` on video, `remote_url` in output, `config save-local` for downloads, `num_inference_steps`.
 
 ---
 
@@ -400,12 +403,12 @@ Interactive ratatui UI for image/video generation, tasks, assets, and settings.
 |------|------|
 | **Home** | ↑↓ / Enter / 1–7 shortcuts; **Video Tasks** shows `(N running)` when applicable; Status bar `[RUN N]` globally |
 | **Generate Image** | Left: **Prompt** (multiline). Right: **Parameters** (ratio, size, count, seed, save, output) + **References**. Tab = Text / Params / Media; ↑↓ in Params; ←→ ratio/count; `a`/`A`/`d` media; Ctrl+Enter submit; **Result** panel at bottom when done |
-| **Generate Video** | Left: **Prompt** + **Negative** (multiline). Right: **Parameters** + **Active/Recent tasks** (symbols, progress bars, 1s refresh when running) + **References**. `t` Tasks · `r` refresh · `g` jump to running · Async toggle; async stays on page with **Result (running)** panel until complete |
+| **Generate Video** | Left: **Prompt** (multiline). Right: **Parameters** (model, size, ratio, duration, seed) + **Active/Recent tasks** (symbols, progress bars, 1s refresh when running) + **References**. `t` Tasks · `r` refresh · `g` jump to running · Async toggle; async stays on page with **Result (running)** panel until complete |
 | **Video Tasks** | Colored state icons + progress bars; title shows `(N running)`; auto-refresh 1s when running else 5s; `g` select running row |
 | **Assets** | List TUI; `v` send to video form; Enter copy field |
 | **Settings** | Edit config; `s` / Enter on Actions = save |
 | **Chat** | Exits dashboard → full agent chat TUI |
 
-Params lines show resolved **pixel size** (tier) and video **frame/timing** inline (no side preview panel).
+Params lines show resolved **pixel size** (tier) and video **duration** inline (no side preview panel).
 
 `chat` (PI-based agent TUI). For non-interactive agents, prefer `image` / `video` with JSON stdout unless the task specifically needs the chat agent.

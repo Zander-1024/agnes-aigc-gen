@@ -9,14 +9,11 @@ use serde_json::{Value, json};
 use crate::api::ApiClient;
 use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::error;
-use crate::api::image::resolve_image_seed;
-use crate::api::types::{ExtraBodyVideo, VideoCreateRequest, VideoStatus, VideoTaskResponse};
+use crate::api::types::{VideoCreateRequest, VideoReference, VideoStatus, VideoTaskResponse};
 use crate::db::VideoTaskRecord;
-use crate::media::input::ImageInput;
-use crate::media::input::{ensure_same_ratio, image_dimensions_from_bytes, load_image_bytes};
-use crate::media::{classify_input, parse_image_inputs};
+use crate::media::parse_image_inputs;
 use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url};
-use crate::ratio::{AspectRatio, resolve_video_timing, video_dimensions};
+use crate::ratio::{AspectRatio, validate_video_duration, validate_video_ratio, video_size_options};
 use crate::retry::{backoff_delay, is_retryable_http_status};
 
 const POLL_EARLY_PHASE: Duration = Duration::from_secs(120);
@@ -25,12 +22,17 @@ const POLL_INTERVAL_LATE: Duration = Duration::from_secs(15);
 
 pub struct VideoRequest {
     pub prompt: String,
-    pub negative_prompt: Option<String>,
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub size: String,
     pub seed: Option<u32>,
     pub ratio: AspectRatio,
     pub duration: f64,
-    pub frame_rate: u32,
     pub images: Vec<String>,
+    pub first_frame: Option<String>,
+    pub last_frame: Option<String>,
+    pub audios: Vec<String>,
+    pub videos: Vec<VideoReference>,
     pub task_id: Option<String>,
     /// Submit task and return immediately without polling.
     pub async_mode: bool,
@@ -110,67 +112,18 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         );
     }
 
-    let (num_frames, actual_duration) = resolve_video_timing(req.duration, req.frame_rate)?;
-    let seed = match req.seed {
-        Some(s) => Some(resolve_image_seed(Some(s))?),
-        None => None,
-    };
-
-    let inputs_raw = parse_image_inputs(&req.images)?;
-
-    let resolved: Vec<String> = inputs_raw
-        .iter()
-        .map(|s| api.db.resolve_reference(s))
-        .collect::<Result<_>>()?;
-
-    let mut input_record = json!({
-        "prompt": req.prompt,
-        "negative_prompt": req.negative_prompt,
-        "seed": seed,
-        "ratio": req.ratio.label(),
-        "duration": req.duration,
-        "actual_duration": actual_duration,
-        "frame_rate": req.frame_rate,
-        "num_frames": num_frames,
-        "images": req.images,
-        "resolved_images": resolved,
-        "model": api.config.video_model,
-    });
-
-    let (dims, frame_urls) = if resolved.is_empty() {
-        (video_dimensions(&req.ratio), Vec::new())
-    } else {
-        let (dims, urls) = video_frame_urls(&resolved, &api.client)?;
-        (dims, urls)
-    };
-
+    let model = req.model.as_deref().unwrap_or(&api.config.video_model);
+    let mut body = build_video_body(&req, model)?;
+    resolve_video_media(api, &mut body)?;
+    let mut input_record = serde_json::to_value(&body)?;
     log::debug!(
-        "video create size={}x{} frames={num_frames} duration={actual_duration:.3}s frame_rate={} seed={seed:?} input_frames={}",
-        dims.width,
-        dims.height,
-        req.frame_rate,
-        frame_urls.len()
+        "video create model={} mode={} size={} duration={}s ratio={}",
+        body.model,
+        body.mode,
+        body.size,
+        body.seconds,
+        body.aspect_ratio
     );
-    match frame_urls.len() {
-        0 => log::debug!("video mode: text-to-video"),
-        1 => log::debug!("video mode: image-to-video"),
-        n => log::debug!("video mode: multi-frame ({n} images)"),
-    }
-
-    let mut body = VideoCreateRequest {
-        model: api.config.video_model.clone(),
-        prompt: req.prompt.clone(),
-        image: None,
-        height: Some(dims.height),
-        width: Some(dims.width),
-        num_frames: Some(num_frames),
-        frame_rate: Some(req.frame_rate),
-        negative_prompt: req.negative_prompt.clone(),
-        seed,
-        extra_body: None,
-    };
-
-    apply_video_frames(&mut body, frame_urls);
 
     let resp = api.post_json("videos", &body)?;
     let resp = ApiClient::ensure_success(resp, "video task creation")?;
@@ -203,7 +156,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         return Ok(GenerationResult {
             kind: "video".into(),
             ratio: req.ratio.label(),
-            size: dims.size_string(),
+            size: body.size.clone(),
             uri: String::new(),
             asset_uri: None,
             generation_id: Some(record.id),
@@ -213,7 +166,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     poll_and_finalize(
         api,
         &query_id,
-        &FinalizeOutput::from_request(&req, req.ratio.label(), dims.size_string(), Some(input_record)),
+        &FinalizeOutput::from_request(&req, req.ratio.label(), body.size, Some(input_record)),
     )
 }
 
@@ -264,7 +217,9 @@ pub fn fetch_video_task_once(api: &ApiClient, query_id: &str) -> Result<VideoTas
 
 fn get_video_query(api: &ApiClient, query_id: &str) -> Result<reqwest::blocking::Response> {
     if is_video_id(query_id) {
-        let url = video_id_result_url(&api.config.base_url, &api.config.video_model, query_id)?;
+        let record = api.db.get_video_task(query_id).ok();
+        let model = recorded_video_model(record.as_ref()).unwrap_or(&api.config.video_model);
+        let url = video_id_result_url(&api.config.base_url, model, query_id)?;
         return api.get_json_url(&url);
     }
     let path = format!("videos/{query_id}");
@@ -462,82 +417,311 @@ fn poll_and_finalize(api: &ApiClient, query_id: &str, output: &FinalizeOutput) -
     Ok(result)
 }
 
-fn apply_video_frames(body: &mut VideoCreateRequest, frame_urls: Vec<String>) {
-    match frame_urls.len() {
-        0 => {}
-        1 => body.image = Some(frame_urls[0].clone()),
-        _ => body.extra_body = Some(ExtraBodyVideo { image: Some(frame_urls) }),
-    }
+fn recorded_video_model(record: Option<&VideoTaskRecord>) -> Option<&str> {
+    record?.input_json.as_ref()?.get("model")?.as_str()
 }
 
-fn video_frame_urls(
-    resolved: &[String],
-    client: &reqwest::blocking::Client,
-) -> Result<(crate::ratio::Dimensions, Vec<String>)> {
-    let classified: Vec<_> = resolved.iter().map(|s| classify_input(s)).collect();
-    let urls: Vec<String> = classified
-        .iter()
-        .zip(resolved)
-        .map(|(input, raw)| match input {
-            ImageInput::Url(u) => Ok(u.clone()),
-            _ => bail!(
-                "video -i/--image requires HTTPS URL or asset:// (remote URL); \
-                 unsupported input {raw:?}. Generate an image first and pass asset:// or a public URL. \
-                 Local paths, base64, and data URIs are not supported for video"
-            ),
-        })
-        .collect::<Result<_>>()?;
-
-    let mut dims = Vec::new();
-    for input in &classified {
-        let bytes = load_image_bytes(input, client)?;
-        dims.push(image_dimensions_from_bytes(&bytes)?);
+fn build_video_body(req: &VideoRequest, model: &str) -> Result<VideoCreateRequest> {
+    anyhow::ensure!(
+        matches!(model, "agnes-video-2.5" | "agnes-video-2.5-flash"),
+        "unsupported video model {model:?}; use agnes-video-2.5 or agnes-video-2.5-flash"
+    );
+    let seconds = validate_video_duration(req.duration)?.to_string();
+    validate_video_ratio(&req.ratio)?;
+    let size = req.size.trim().to_ascii_uppercase();
+    anyhow::ensure!(
+        video_size_options(model).contains(&size.as_str()),
+        "unsupported size {size:?} for {model}; supported: {}",
+        video_size_options(model).join(", ")
+    );
+    let images = parse_image_inputs(&req.images)?;
+    let audios = parse_image_inputs(&req.audios)?;
+    let has_frames = req.first_frame.is_some() || req.last_frame.is_some();
+    let inferred_mode = if has_frames || (images.len() == 1 && audios.is_empty() && req.videos.is_empty()) {
+        "keyframe"
+    } else if !images.is_empty() || !audios.is_empty() || !req.videos.is_empty() {
+        "reference"
+    } else {
+        "text"
+    };
+    let mode = req.mode.as_deref().unwrap_or(inferred_mode);
+    let mut body = VideoCreateRequest {
+        model: model.into(),
+        prompt: req.prompt.clone(),
+        mode: mode.into(),
+        seconds,
+        size,
+        aspect_ratio: req.ratio.label(),
+        n: 1,
+        first_frame: req.first_frame.clone(),
+        last_frame: req.last_frame.clone(),
+        images,
+        audios,
+        videos: req.videos.clone(),
+        seed: req.seed,
+    };
+    match mode {
+        "text" => anyhow::ensure!(
+            !has_frames && body.images.is_empty() && body.audios.is_empty() && body.videos.is_empty(),
+            "text mode does not accept reference media or first/last frames"
+        ),
+        "keyframe" => {
+            anyhow::ensure!(
+                body.audios.is_empty() && body.videos.is_empty(),
+                "keyframe mode does not accept audio or video references"
+            );
+            if !body.images.is_empty() {
+                anyhow::ensure!(
+                    body.images.len() == 1 && body.first_frame.is_none(),
+                    "keyframe mode accepts one -i image as the first frame; use --first-frame/--last-frame for explicit frames"
+                );
+                body.first_frame = body.images.pop();
+            }
+            anyhow::ensure!(
+                body.first_frame.is_some() || body.last_frame.is_some(),
+                "keyframe mode requires a first or last frame"
+            );
+        }
+        "reference" => {
+            anyhow::ensure!(!has_frames, "reference mode does not accept first/last frames");
+            anyhow::ensure!(
+                !body.images.is_empty() || !body.audios.is_empty() || !body.videos.is_empty(),
+                "reference mode requires images, audio, or video"
+            );
+            let max_images = if model.ends_with("-flash") { 5 } else { 8 };
+            anyhow::ensure!(
+                body.images.len() <= max_images,
+                "{model} accepts at most {max_images} reference images"
+            );
+            anyhow::ensure!(body.audios.len() <= 3, "reference mode accepts at most 3 audio clips");
+            let max_videos = if model.ends_with("-flash") { 0 } else { 1 };
+            anyhow::ensure!(
+                body.videos.len() <= max_videos,
+                "{model} accepts at most {max_videos} reference videos"
+            );
+            anyhow::ensure!(
+                body.images.len() + body.audios.len() + body.videos.len() <= 12,
+                "reference mode accepts at most 12 media files"
+            );
+        }
+        _ => bail!("unsupported video mode {mode:?}; use text, keyframe, or reference"),
     }
-    ensure_same_ratio(&dims)?;
-    let ratio = AspectRatio::from_dimensions(dims[0].0, dims[0].1);
-    let target = video_dimensions(&ratio);
-    Ok((target, urls))
+    for video in &body.videos {
+        if let Some(start) = video.start_seconds {
+            anyhow::ensure!(
+                start.is_finite() && start >= 0.0,
+                "video start_seconds must be a finite non-negative number"
+            );
+        }
+    }
+    Ok(body)
+}
+
+fn resolve_video_media(api: &ApiClient, body: &mut VideoCreateRequest) -> Result<()> {
+    for frame in [&mut body.first_frame, &mut body.last_frame].into_iter().flatten() {
+        *frame = resolve_video_media_url(api, frame)?;
+    }
+    for url in body.images.iter_mut().chain(&mut body.audios) {
+        *url = resolve_video_media_url(api, url)?;
+    }
+    for video in &mut body.videos {
+        video.url = resolve_video_media_url(api, &video.url)?;
+    }
+    Ok(())
+}
+
+fn resolve_video_media_url(api: &ApiClient, raw: &str) -> Result<String> {
+    let resolved = api.db.resolve_reference(raw)?;
+    validate_video_media_url(&resolved)?;
+    Ok(resolved)
+}
+
+fn validate_video_media_url(resolved: &str) -> Result<()> {
+    let url = Url::parse(resolved).context("video media requires an HTTPS URL or asset:// reference")?;
+    anyhow::ensure!(
+        url.scheme() == "https" && url.host_str().is_some(),
+        "video media requires an HTTPS URL or asset:// reference; local paths, base64, and data URIs are not supported"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn request() -> VideoRequest {
+        VideoRequest {
+            prompt: "test".into(),
+            model: None,
+            mode: None,
+            size: "720P".into(),
+            seed: Some(1101),
+            ratio: AspectRatio { w: 16, h: 9 },
+            duration: 5.0,
+            images: vec![],
+            first_frame: None,
+            last_frame: None,
+            audios: vec![],
+            videos: vec![],
+            task_id: None,
+            async_mode: true,
+            output_dir: None,
+            save_local: false,
+            max_retries: None,
+            output_format: OutputFormat::Json,
+            quiet: true,
+        }
+    }
+
     #[test]
     fn poll_interval_phases() {
         assert_eq!(poll_interval(Duration::from_secs(0)), POLL_INTERVAL_EARLY);
         assert_eq!(poll_interval(Duration::from_secs(119)), POLL_INTERVAL_EARLY);
         assert_eq!(poll_interval(Duration::from_secs(120)), POLL_INTERVAL_LATE);
-        assert_eq!(poll_interval(Duration::from_secs(300)), POLL_INTERVAL_LATE);
-    }
-
-    #[test]
-    fn apply_video_frames_no_mode() {
-        let mut body = VideoCreateRequest {
-            model: "agnes-video-v2.0".into(),
-            prompt: "test".into(),
-            image: None,
-            height: None,
-            width: None,
-            num_frames: None,
-            frame_rate: None,
-            negative_prompt: None,
-            seed: None,
-            extra_body: None,
-        };
-        apply_video_frames(&mut body, vec!["https://a/1.png".into(), "https://a/2.png".into()]);
-        assert!(body.image.is_none());
-        let extra = body.extra_body.as_ref().unwrap();
-        assert_eq!(extra.image.as_ref().unwrap().len(), 2);
     }
 
     #[test]
     fn video_id_result_url_uses_agnesapi_endpoint() {
-        let url = video_id_result_url("https://apihub.agnes-ai.com/v1", "agnes-video-v2.0", "video_abc==").unwrap();
-
+        let url =
+            video_id_result_url("https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash", "video_abc==").unwrap();
         assert_eq!(
             url,
-            "https://apihub.agnes-ai.com/agnesapi?video_id=video_abc%3D%3D&model_name=agnes-video-v2.0"
+            "https://apihub.agnes-ai.com/agnesapi?video_id=video_abc%3D%3D&model_name=agnes-video-2.5-flash"
         );
+    }
+
+    #[test]
+    fn polling_uses_model_saved_with_the_task() {
+        let record: VideoTaskRecord = serde_json::from_value(json!({
+            "id": 1,
+            "task_id": "video_123",
+            "status": "queued",
+            "phase": "processing",
+            "prompt": "test",
+            "input_json": {"model": "agnes-video-2.5-flash"},
+            "created_at": "2026-10-31",
+            "updated_at": "2026-10-31"
+        }))
+        .unwrap();
+        let model = recorded_video_model(Some(&record)).unwrap();
+        let url = video_id_result_url("https://example.com/v1", model, &record.task_id).unwrap();
+        assert!(url.ends_with("model_name=agnes-video-2.5-flash"));
+        assert!(recorded_video_model(None).is_none());
+    }
+
+    #[test]
+    fn video_request_matches_current_protocol() {
+        let body = build_video_body(&request(), "agnes-video-2.5").unwrap();
+        let value = serde_json::to_value(body).unwrap();
+        assert_eq!(value["seconds"], "5");
+        assert_eq!(value["mode"], "text");
+        assert_eq!(value["aspect_ratio"], "16:9");
+        assert_eq!(value["size"], "720P");
+        assert_eq!(value["seed"], 1101);
+        for legacy in ["width", "height", "num_frames", "frame_rate", "negative_prompt", "extra_body"] {
+            assert!(value.get(legacy).is_none());
+        }
+    }
+
+    #[test]
+    fn one_image_defaults_to_first_frame_and_explicit_reference_is_supported() {
+        let mut req = request();
+        req.images = vec!["https://example.com/image.png".into()];
+        let body = build_video_body(&req, "agnes-video-2.5").unwrap();
+        assert_eq!(body.mode, "keyframe");
+        assert_eq!(body.first_frame.as_deref(), Some("https://example.com/image.png"));
+        assert!(body.images.is_empty());
+        req.mode = Some("reference".into());
+        let body = build_video_body(&req, "agnes-video-2.5").unwrap();
+        assert_eq!(body.images.len(), 1);
+        assert!(body.first_frame.is_none());
+    }
+
+    #[test]
+    fn keyframe_and_multimodal_reference_payloads_use_top_level_fields() {
+        let mut req = request();
+        req.last_frame = Some("https://example.com/last.png".into());
+        let value = serde_json::to_value(build_video_body(&req, "agnes-video-2.5").unwrap()).unwrap();
+        assert_eq!(value["mode"], "keyframe");
+        assert_eq!(value["last_frame"], "https://example.com/last.png");
+        assert!(value.get("first_frame").is_none());
+        assert!(value.get("images").is_none());
+
+        req.last_frame = None;
+        req.images = vec!["https://example.com/image.png".into(); 2];
+        req.audios = vec!["https://example.com/audio.mp3".into()];
+        req.videos = vec![VideoReference {
+            url: "https://example.com/input.mp4".into(),
+            start_seconds: Some(35.5),
+            require_audio: true,
+        }];
+        let value = serde_json::to_value(build_video_body(&req, "agnes-video-2.5").unwrap()).unwrap();
+        assert_eq!(value["mode"], "reference");
+        assert_eq!(value["images"].as_array().unwrap().len(), 2);
+        assert_eq!(value["audios"][0], "https://example.com/audio.mp3");
+        assert_eq!(value["videos"][0]["start_seconds"], 35.5);
+        assert_eq!(value["videos"][0]["require_audio"], true);
+        assert_eq!(value["n"], 1);
+        assert!(value.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn reference_media_count_and_start_time_limits() {
+        let mut req = request();
+        req.images = vec!["https://example.com/image.png".into(); 8];
+        req.audios = vec!["https://example.com/audio.mp3".into(); 3];
+        req.videos = vec![VideoReference {
+            url: "https://example.com/input.mp4".into(),
+            start_seconds: Some(0.0),
+            require_audio: false,
+        }];
+        assert!(build_video_body(&req, "agnes-video-2.5").is_ok());
+        req.images.push("https://example.com/extra.png".into());
+        assert!(build_video_body(&req, "agnes-video-2.5").is_err());
+        req.images.truncate(5);
+        req.videos.clear();
+        assert!(build_video_body(&req, "agnes-video-2.5-flash").is_ok());
+        req.audios.push("https://example.com/extra.mp3".into());
+        assert!(build_video_body(&req, "agnes-video-2.5-flash").is_err());
+        req.audios.clear();
+        req.videos = vec![VideoReference {
+            url: "https://example.com/input.mp4".into(),
+            start_seconds: Some(-1.0),
+            require_audio: false,
+        }];
+        assert!(build_video_body(&req, "agnes-video-2.5").is_err());
+    }
+
+    #[test]
+    fn video_media_requires_https_after_asset_resolution() {
+        assert!(validate_video_media_url("https://example.com/input.png").is_ok());
+        for invalid in ["http://example.com/input.png", "./input.png", "data:image/png;base64,abcd", "base64:abcd"] {
+            assert!(validate_video_media_url(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_modes_and_flash_limits_before_submission() {
+        let mut req = request();
+        req.mode = Some("reference".into());
+        assert!(build_video_body(&req, "agnes-video-2.5").is_err());
+        req.images = vec!["https://example.com/image.png".into(); 6];
+        assert!(build_video_body(&req, "agnes-video-2.5").is_ok());
+        assert!(build_video_body(&req, "agnes-video-2.5-flash").is_err());
+        req.images.clear();
+        req.videos = vec![VideoReference {
+            url: "https://example.com/video.mp4".into(),
+            start_seconds: Some(35.0),
+            require_audio: false,
+        }];
+        assert!(build_video_body(&req, "agnes-video-2.5").is_ok());
+        assert!(build_video_body(&req, "agnes-video-2.5-flash").is_err());
+        req.videos.clear();
+        req.mode = Some("text".into());
+        req.size = "1080P".into();
+        assert!(build_video_body(&req, "agnes-video-2.5-flash").is_err());
+        req.size = "720P".into();
+        req.first_frame = Some("https://example.com/first.png".into());
+        assert!(build_video_body(&req, "agnes-video-2.5").is_err());
     }
 }

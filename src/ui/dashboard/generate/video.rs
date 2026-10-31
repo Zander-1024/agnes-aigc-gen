@@ -4,7 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::ratio::{self, ratio_option_display};
+use crate::ratio;
 
 use super::fields::{InputList, SelectField, TextArea, TextInput, VIDEO_FORM_HELP, move_field_focus};
 use super::layout::{
@@ -13,7 +13,7 @@ use super::layout::{
 use super::preview::{build_video_preview, default_ratio_index, ratio_from_index};
 use crate::ui::dashboard::task_display::TaskStripData;
 
-pub const VIDEO_PARAM_COUNT: usize = 7;
+pub const VIDEO_PARAM_COUNT: usize = 9;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VideoSection {
@@ -22,26 +22,19 @@ enum VideoSection {
     Media,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TextFocus {
-    Prompt,
-    Negative,
-}
-
 pub struct VideoForm {
     pub prompt: TextArea,
-    pub negative: TextArea,
     pub ratio: SelectField,
     pub ratio_options: Vec<ratio::RatioOption>,
     pub duration: TextInput,
-    pub frame_rate: TextInput,
+    pub size: SelectField,
+    pub model: SelectField,
     pub inputs: InputList,
     pub seed: TextInput,
     pub async_mode: bool,
     pub save_local: bool,
     pub output_dir: TextInput,
     section: VideoSection,
-    text_focus: TextFocus,
     param_focus: usize,
     pub editing: bool,
     pub show_help: bool,
@@ -52,44 +45,48 @@ pub struct VideoForm {
 impl VideoForm {
     pub fn new() -> Self {
         let ratio_options = ratio::video_ratio_options();
-        let ratio_labels: Vec<String> = ratio_options.iter().map(ratio_option_display).collect();
+        let ratio_labels: Vec<String> = ratio_options.iter().map(|option| option.label.clone()).collect();
         let ratio_index = default_ratio_index(&ratio_options, "16:9");
-        Self {
+        let configured = crate::config::AppConfig::load().unwrap_or_default().video_model;
+        let model_index = usize::from(configured == "agnes-video-2.5-flash");
+        let mut form = Self {
             prompt: TextArea::new(),
-            negative: TextArea::new(),
             ratio: SelectField::new(ratio_labels, ratio_index),
             ratio_options,
             duration: TextInput::new("5"),
-            frame_rate: TextInput::new("24"),
+            size: SelectField::new(vec!["720P".into(), "1080P".into(), "1K".into(), "2K".into()], 0),
+            model: SelectField::new(
+                vec!["agnes-video-2.5".into(), "agnes-video-2.5-flash".into()],
+                model_index,
+            ),
             inputs: InputList::new(),
             seed: TextInput::empty(),
             async_mode: true,
             save_local: false,
             output_dir: TextInput::empty(),
             section: VideoSection::Text,
-            text_focus: TextFocus::Prompt,
             param_focus: 0,
             editing: false,
             show_help: false,
             field_error: None,
             chain_uri: None,
-        }
-    }
-
-    pub fn ratio_disabled(&self) -> bool {
-        !self.inputs.items.is_empty()
-    }
-
-    pub fn sync_ratio_disabled(&mut self) {
-        self.ratio.disabled = self.ratio_disabled();
+        };
+        form.sync_sizes();
+        form
     }
 
     pub fn duration_value(&self) -> f64 {
-        self.duration.value.trim().parse().unwrap_or(5.0)
+        self.duration.value.trim().parse().unwrap_or(f64::NAN)
     }
 
-    pub fn frame_rate_value(&self) -> u32 {
-        self.frame_rate.value.trim().parse().unwrap_or(24)
+    fn sync_sizes(&mut self) {
+        let previous = self.size.current().to_string();
+        let options: Vec<String> = ratio::video_size_options(self.model.current())
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let index = options.iter().position(|size| size == &previous).unwrap_or(0);
+        self.size = SelectField::new(options, index);
     }
 
     pub fn seed_value(&self) -> Option<u32> {
@@ -104,14 +101,12 @@ impl VideoForm {
     pub fn chain_from_last_result(&mut self) {
         if let Some(uri) = self.chain_uri.clone() {
             self.inputs.push_raw(uri, true);
-            self.sync_ratio_disabled();
             self.section = VideoSection::Media;
         }
     }
 
     pub fn focus_prompt(&mut self) {
         self.section = VideoSection::Text;
-        self.text_focus = TextFocus::Prompt;
         self.editing = true;
         self.field_error = None;
     }
@@ -129,10 +124,7 @@ impl VideoForm {
     }
 
     fn active_text_area(&mut self) -> &mut TextArea {
-        match self.text_focus {
-            TextFocus::Prompt => &mut self.prompt,
-            TextFocus::Negative => &mut self.negative,
-        }
+        &mut self.prompt
     }
 
     pub fn handle_key(
@@ -174,6 +166,8 @@ impl VideoForm {
                         } else {
                             self.save_local = !self.save_local;
                         }
+                    } else if matches!(self.param_focus, 0 | 2 | 7) {
+                        self.cycle_selection(true);
                     } else {
                         self.editing = true;
                     }
@@ -185,14 +179,6 @@ impl VideoForm {
                     VideoFormAction::None
                 }
             },
-            crossterm::event::KeyCode::Up if self.section == VideoSection::Text => {
-                self.text_focus = TextFocus::Prompt;
-                VideoFormAction::None
-            }
-            crossterm::event::KeyCode::Down if self.section == VideoSection::Text => {
-                self.text_focus = TextFocus::Negative;
-                VideoFormAction::None
-            }
             crossterm::event::KeyCode::Up if self.section == VideoSection::Params => {
                 self.param_focus = move_field_focus(self.param_focus, VIDEO_PARAM_COUNT, -1);
                 VideoFormAction::None
@@ -224,15 +210,15 @@ impl VideoForm {
                 VideoFormAction::None
             }
             crossterm::event::KeyCode::Left
-                if self.section == VideoSection::Params && self.param_focus == 0 && !self.ratio.disabled =>
+                if self.section == VideoSection::Params && matches!(self.param_focus, 0 | 2 | 7) =>
             {
-                self.ratio.previous();
+                self.cycle_selection(false);
                 VideoFormAction::None
             }
             crossterm::event::KeyCode::Right
-                if self.section == VideoSection::Params && self.param_focus == 0 && !self.ratio.disabled =>
+                if self.section == VideoSection::Params && matches!(self.param_focus, 0 | 2 | 7) =>
             {
-                self.ratio.next();
+                self.cycle_selection(true);
                 VideoFormAction::None
             }
             crossterm::event::KeyCode::Char('a') if self.section == VideoSection::Media => {
@@ -247,7 +233,6 @@ impl VideoForm {
             }
             crossterm::event::KeyCode::Char('d') if self.section == VideoSection::Media => {
                 self.inputs.remove_selected();
-                self.sync_ratio_disabled();
                 VideoFormAction::None
             }
             crossterm::event::KeyCode::Char(c) if !c.is_control() && self.section == VideoSection::Text => {
@@ -261,6 +246,23 @@ impl VideoForm {
                 VideoFormAction::None
             }
             _ => VideoFormAction::None,
+        }
+    }
+
+    fn cycle_selection(&mut self, forward: bool) {
+        let field = match self.param_focus {
+            0 => &mut self.ratio,
+            2 => &mut self.size,
+            7 => &mut self.model,
+            _ => return,
+        };
+        if forward {
+            field.next();
+        } else {
+            field.previous();
+        }
+        if self.param_focus == 7 {
+            self.sync_sizes();
         }
     }
 
@@ -286,14 +288,12 @@ impl VideoForm {
                 crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Enter => self.editing = false,
                 crossterm::event::KeyCode::Char(c) if !c.is_control() => match self.param_focus {
                     1 => self.duration.push_char(c),
-                    2 => self.frame_rate.push_char(c),
                     3 => self.seed.push_char(c),
                     6 => self.output_dir.push_char(c),
                     _ => {}
                 },
                 crossterm::event::KeyCode::Backspace => match self.param_focus {
                     1 => self.duration.pop_char(),
-                    2 => self.frame_rate.pop_char(),
                     3 => self.seed.pop_char(),
                     6 => self.output_dir.pop_char(),
                     _ => {}
@@ -320,7 +320,6 @@ impl VideoForm {
                 let raw = self.inputs.add_buffer.value.trim().to_string();
                 if !raw.is_empty() {
                     self.inputs.push_raw(raw, true);
-                    self.sync_ratio_disabled();
                 }
                 self.inputs.adding = false;
             }
@@ -333,11 +332,9 @@ impl VideoForm {
 
     pub fn validate(&mut self) -> Result<(), String> {
         self.field_error = None;
-        self.sync_ratio_disabled();
         if self.prompt.text().trim().is_empty() {
             self.field_error = Some("prompt is required".into());
             self.section = VideoSection::Text;
-            self.text_focus = TextFocus::Prompt;
             return Err(self.field_error.clone().unwrap());
         }
         for item in &self.inputs.items {
@@ -347,18 +344,22 @@ impl VideoForm {
                 return Err(self.field_error.clone().unwrap());
             }
         }
-        if !self.ratio_disabled()
-            && let Err(err) = ratio_from_index(&self.ratio_options, self.ratio.index)
-        {
+        if let Err(err) = ratio_from_index(&self.ratio_options, self.ratio.index) {
             self.field_error = Some(format!("{err:#}"));
             self.section = VideoSection::Params;
             self.param_focus = 0;
             return Err(self.field_error.clone().unwrap());
         }
-        if let Err(err) = ratio::resolve_video_timing(self.duration_value(), self.frame_rate_value()) {
+        if let Err(err) = ratio::validate_video_duration(self.duration_value()) {
             self.field_error = Some(format!("{err:#}"));
             self.section = VideoSection::Params;
             self.param_focus = 1;
+            return Err(self.field_error.clone().unwrap());
+        }
+        if !self.seed.value.trim().is_empty() && self.seed_value().is_none() {
+            self.field_error = Some("seed must be an unsigned 32-bit integer".into());
+            self.section = VideoSection::Params;
+            self.param_focus = 3;
             return Err(self.field_error.clone().unwrap());
         }
         Ok(())
@@ -366,7 +367,6 @@ impl VideoForm {
 
     pub fn add_asset_input(&mut self, asset_uri: String) {
         self.inputs.push_raw(asset_uri, true);
-        self.sync_ratio_disabled();
         self.section = VideoSection::Media;
     }
 
@@ -374,31 +374,22 @@ impl VideoForm {
         let preview = build_video_preview(
             &self.ratio_options,
             self.ratio.index,
-            self.ratio_disabled(),
             &self.duration.value,
-            &self.frame_rate.value,
+            self.size.current(),
+            self.model.current(),
             self.inputs.items.len(),
         );
         let pf = |i: usize| self.section == VideoSection::Params && self.param_focus == i;
-        let ratio_display = if self.ratio.disabled {
-            "(from inputs)".into()
-        } else {
-            self.ratio.current().to_string()
-        };
+        let ratio_display = self.ratio.current().to_string();
         let duration_display = if self.section == VideoSection::Params && self.editing && self.param_focus == 1 {
             self.duration.display_with_cursor(true)
         } else {
             self.duration.value.clone()
         };
-        let fps_display = if self.section == VideoSection::Params && self.editing && self.param_focus == 2 {
-            self.frame_rate.display_with_cursor(true)
-        } else {
-            self.frame_rate.value.clone()
-        };
         let seed_display = if self.section == VideoSection::Params && self.editing && self.param_focus == 3 {
             self.seed.display_with_cursor(true)
         } else if self.seed.value.trim().is_empty() {
-            "random".into()
+            "omitted".into()
         } else {
             self.seed.value.clone()
         };
@@ -412,12 +403,6 @@ impl VideoForm {
         let mut lines = vec![
             param_line("Ratio", pf(0), self.section == VideoSection::Params, &ratio_display),
             param_line(
-                "Size",
-                pf(0),
-                self.section == VideoSection::Params,
-                &format!("{} ({}) · {}", preview.size, preview.tier, preview.input_note),
-            ),
-            param_line(
                 "Duration",
                 pf(1),
                 self.section == VideoSection::Params,
@@ -426,7 +411,12 @@ impl VideoForm {
                     preview.timing, preview.max_duration
                 ),
             ),
-            param_line("FPS", pf(2), self.section == VideoSection::Params, &fps_display),
+            param_line(
+                "Size",
+                pf(2),
+                self.section == VideoSection::Params,
+                &format!("{} ({}) · {}", preview.size, preview.tier, preview.input_note),
+            ),
             param_line("Seed", pf(3), self.section == VideoSection::Params, &seed_display),
             param_line(
                 "Async",
@@ -445,6 +435,13 @@ impl VideoForm {
                 if self.save_local { "[x] yes" } else { "[ ] no" },
             ),
             param_line("Output", pf(6), self.section == VideoSection::Params, &out_display),
+            param_line(
+                "Model",
+                pf(7),
+                self.section == VideoSection::Params,
+                self.model.current(),
+            ),
+            param_line("Generate", pf(8), self.section == VideoSection::Params, "Enter / F5"),
         ];
         if let Some(ref err) = self.field_error {
             lines.push(error_line(err));
@@ -465,34 +462,18 @@ impl VideoForm {
             .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
             .split(outer[0]);
 
-        let left = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(columns[0]);
-
         render_text_box(
             frame,
-            left[0],
+            columns[0],
             "Prompt *",
-            form_focused && self.section == VideoSection::Text && self.text_focus == TextFocus::Prompt,
-            form_focused && self.editing && self.section == VideoSection::Text && self.text_focus == TextFocus::Prompt,
+            form_focused && self.section == VideoSection::Text,
+            form_focused && self.editing && self.section == VideoSection::Text,
             &self.prompt,
-        );
-        render_text_box(
-            frame,
-            left[1],
-            "Negative",
-            form_focused && self.section == VideoSection::Text && self.text_focus == TextFocus::Negative,
-            form_focused
-                && self.editing
-                && self.section == VideoSection::Text
-                && self.text_focus == TextFocus::Negative,
-            &self.negative,
         );
 
         let right = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(10), Constraint::Length(7), Constraint::Min(4)])
+            .constraints([Constraint::Length(12), Constraint::Length(7), Constraint::Min(4)])
             .split(columns[1]);
 
         render_params_panel(
@@ -541,12 +522,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ratio_disabled_when_inputs_present() {
+    fn ratio_stays_selectable_for_reference_images() {
         let mut form = VideoForm::new();
-        assert!(!form.ratio_disabled());
+        assert!(!form.ratio.disabled);
         form.inputs.push_raw("https://example.com/a.png".into(), true);
-        form.sync_ratio_disabled();
-        assert!(form.ratio.disabled);
+        assert!(!form.ratio.disabled);
+    }
+
+    #[test]
+    fn flash_model_resets_unsupported_resolution() {
+        let mut form = VideoForm::new();
+        form.model.index = 0;
+        form.sync_sizes();
+        form.size.index = 3;
+        form.param_focus = 7;
+        form.cycle_selection(true);
+        assert_eq!(form.model.current(), "agnes-video-2.5-flash");
+        assert_eq!(form.size.options, ["720P"]);
+    }
+
+    #[test]
+    fn invalid_duration_and_seed_stay_on_form() {
+        let mut form = VideoForm::new();
+        form.prompt.push_char('x');
+        form.duration = TextInput::new("invalid");
+        assert!(form.validate().is_err());
+        form.duration = TextInput::new("5");
+        form.seed = TextInput::new("-1");
+        assert!(form.validate().is_err());
     }
 
     #[test]

@@ -473,9 +473,9 @@ mod tests {
     fn chat_body_includes_thinking_flag_and_output_limit() {
         let model = Model::openai_compat(
             "agnes",
-            "agnes-2.0-flash",
+            "agnes-3.0-flash",
             "https://apihub.agnes-ai.com/v1",
-            262_144,
+            524_288,
             65_536,
         );
         let ctx = Context {
@@ -490,14 +490,14 @@ mod tests {
 
         let body = build_chat_body(&model, &ctx, &options);
 
-        assert_eq!(body["model"], "agnes-2.0-flash");
+        assert_eq!(body["model"], "agnes-3.0-flash");
         assert_eq!(body["max_tokens"], 65_536);
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
     #[test]
     fn chat_body_uses_openai_tool_shape() {
-        let model = Model::openai_compat("agnes", "agnes-2.0-flash", "https://example.com/v1", 1, 1);
+        let model = Model::openai_compat("agnes", "agnes-3.0-flash", "https://example.com/v1", 1, 1);
         let ctx = Context {
             system_prompt: None,
             messages: vec![Message::user_text("use a tool")],
@@ -518,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn stream_retries_retryable_statuses_before_success() {
         let server = RetryServer::spawn(vec![503, 503, 200]);
-        let model = Model::openai_compat("agnes", "agnes-2.0-flash", server.base_url(), 1, 1);
+        let model = Model::openai_compat("agnes", "agnes-3.0-flash", server.base_url(), 1, 1);
         let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
         let options = AgnesStreamOptions {
             stream: StreamOptions {
@@ -546,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn stream_errors_after_three_failed_attempts() {
         let server = RetryServer::spawn(vec![503, 503, 503]);
-        let model = Model::openai_compat("agnes", "agnes-2.0-flash", server.base_url(), 1, 1);
+        let model = Model::openai_compat("agnes", "agnes-3.0-flash", server.base_url(), 1, 1);
         let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
         let options = AgnesStreamOptions {
             stream: StreamOptions {
@@ -586,7 +586,7 @@ mod tests {
                     let _ = stream.read(&mut buf);
                     if status == 200 {
                         let body = concat!(
-                            "data: {\"model\":\"agnes-2.0-flash\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+                            "data: {\"model\":\"agnes-3.0-flash\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
                             "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n\n",
                             "data: [DONE]\n\n",
                         );

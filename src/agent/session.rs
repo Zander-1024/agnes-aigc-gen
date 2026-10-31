@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn session_roundtrip_keeps_messages() {
         let dir = std::env::temp_dir().join(format!("agnes-chat-session-{}", pi_ai::now_ms()));
-        let mut session = ChatSession::new("agnes-2.0-flash", true);
+        let mut session = ChatSession::new("agnes-3.0-flash", true);
         session.messages.push(Message::user_text("hello"));
 
         save_session_to_dir(&dir, &session).unwrap();

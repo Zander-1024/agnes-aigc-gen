@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Default to Agnes 3.0 Flash (512K chat context), Image 2.5 Flash, and Video 2.5; add Video 2.5 Flash selection.
+- Replace the video frame-count API with 4–12 second durations, resolution tiers, and text/keyframe/reference modes, including audio/video references.
+- Poll with the model recorded for each task and read completed video URLs from the current response format.
+- Refresh model references, CLI examples, and existing-config migration instructions; remove old video frame-rate and negative-prompt options.
+
 ## [0.4.2] - 2026-06-25
 
 ### Added

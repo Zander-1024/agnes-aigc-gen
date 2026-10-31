@@ -1,6 +1,6 @@
 # Chat context compression
 
-Agnes Chat keeps the full `pi_ai::Message` session history in SQLite-backed chat sessions. Long conversations can approach the configured context window (`chat_context_tokens`, default `256k`). This document describes how the TUI estimates usage, when compression runs, and what gets preserved.
+Agnes Chat keeps the full `pi_ai::Message` session history in SQLite-backed chat sessions. Long conversations can approach the configured context window (`chat_context_tokens`, default `512k`). This document describes how the TUI estimates usage, when compression runs, and what gets preserved.
 
 ## Token estimation
 
@@ -63,7 +63,7 @@ Implementation: [`src/agent/context.rs`](../src/agent/context.rs)
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `chat_context_tokens` | `262144` | Context window shown in header; compression threshold derived from this |
+| `chat_context_tokens` | `524288` | Context window shown in header; compression threshold derived from this |
 | Auto threshold | 90% | Constant `AUTO_COMPRESS_THRESHOLD_PERCENT` in `context.rs` |
 | Preserve recent | 12 messages | Constant `PRESERVE_RECENT_MESSAGES` |
 

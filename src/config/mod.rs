@@ -172,7 +172,7 @@ const SETTABLE_KEYS: &[ConfigKeyInfo] = &[
         example: DEFAULT_TEXT_MODEL,
     },
     ConfigKeyInfo { names: "chat-thinking", description: "Default chat thinking mode", example: "true" },
-    ConfigKeyInfo { names: "chat-context-tokens", description: "Chat context window tokens", example: "256k" },
+    ConfigKeyInfo { names: "chat-context-tokens", description: "Chat context window tokens", example: "512k" },
     ConfigKeyInfo { names: "chat-max-output-tokens", description: "Chat max output tokens", example: "64k" },
     ConfigKeyInfo { names: "image-model", description: "Image model", example: DEFAULT_IMAGE_MODEL },
     ConfigKeyInfo { names: "video-model", description: "Video model", example: DEFAULT_VIDEO_MODEL },
@@ -288,7 +288,7 @@ mod tests {
 
         assert_eq!(cfg.thinking_text_model.as_deref(), None);
         assert!(cfg.chat_thinking);
-        assert_eq!(cfg.chat_context_tokens, 262_144);
+        assert_eq!(cfg.chat_context_tokens, 524_288);
         assert_eq!(cfg.chat_max_output_tokens, 65_536);
     }
 

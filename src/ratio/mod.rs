@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,19 +38,6 @@ impl AspectRatio {
 
     pub fn label(&self) -> String {
         format!("{}:{}", self.w, self.h)
-    }
-
-    pub fn from_dimensions(width: u32, height: u32) -> Self {
-        fn gcd(mut a: u32, mut b: u32) -> u32 {
-            while b != 0 {
-                let t = b;
-                b = a % b;
-                a = t;
-            }
-            a
-        }
-        let g = gcd(width, height).max(1);
-        Self { w: width / g, h: height / g }
     }
 }
 
@@ -103,20 +87,9 @@ fn image_ratio_labels() -> String {
     IMAGE_SUPPORTED_RATIOS.join(", ")
 }
 
-/// Video output sizes (720p tier, shortest edge 768, multiples of 64).
-static VIDEO_RATIO_PRESETS: LazyLock<HashMap<&'static str, Dimensions>> = LazyLock::new(|| {
-    HashMap::from([
-        ("1:1", Dimensions::new(768, 768)),
-        ("4:3", Dimensions::new(960, 768)),
-        ("3:4", Dimensions::new(768, 960)),
-        ("16:9", Dimensions::new(1280, 768)),
-        ("9:16", Dimensions::new(768, 1280)),
-    ])
-});
-
-fn lookup_preset(presets: &HashMap<&'static str, Dimensions>, ratio: &AspectRatio) -> Option<Dimensions> {
-    presets.get(ratio.label().as_str()).copied()
-}
+static VIDEO_SUPPORTED_RATIOS: &[&str] = &["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+static VIDEO_SIZES: &[&str] = &["720P", "1080P", "1K", "2K"];
+static FLASH_VIDEO_SIZES: &[&str] = &["720P"];
 
 /// One selectable aspect ratio with resolved pixel dimensions (for UI pickers).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,22 +99,7 @@ pub struct RatioOption {
     pub tier: &'static str,
 }
 
-/// Catalog tier for future multi-resolution support (e.g. 2K).
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-pub struct RatioCatalog {
-    pub tier: &'static str,
-}
-
-pub const VIDEO_RESOLUTION_TIER: &str = "720p";
-
-fn presets_to_options(presets: &HashMap<&'static str, Dimensions>, tier: &'static str) -> Vec<RatioOption> {
-    let mut keys: Vec<_> = presets.keys().copied().collect();
-    keys.sort_unstable();
-    keys.into_iter()
-        .map(|label| RatioOption { label: label.to_string(), dimensions: presets[label], tier })
-        .collect()
-}
+pub const VIDEO_RESOLUTION_TIER: &str = "720P";
 
 /// Supported image aspect ratios for UI pickers.
 pub fn image_ratio_options() -> Vec<RatioOption> {
@@ -156,19 +114,24 @@ pub fn image_resolution_tiers() -> &'static [&'static str] {
     IMAGE_RESOLUTION_TIERS
 }
 
-/// Known video aspect ratios with 720p-tier dimensions.
+/// Known video aspect ratios with standard-model 720P dimensions.
 pub fn video_ratio_options() -> Vec<RatioOption> {
-    presets_to_options(&VIDEO_RATIO_PRESETS, VIDEO_RESOLUTION_TIER)
+    VIDEO_SUPPORTED_RATIOS
+        .iter()
+        .map(|label| RatioOption {
+            label: (*label).to_string(),
+            dimensions: video_dimensions(&AspectRatio::parse(label).expect("static video ratio")),
+            tier: VIDEO_RESOLUTION_TIER,
+        })
+        .collect()
 }
 
-/// Maximum allowed duration in seconds at a given frame rate.
-pub fn video_max_duration_secs(frame_rate: u32) -> Result<f64> {
-    Ok(max_video_duration(frame_rate)? as f64)
-}
-
-/// Preview snapped frame count and actual duration for UI.
-pub fn video_timing_preview(duration_secs: f64, frame_rate: u32) -> Result<(u32, f64)> {
-    resolve_video_timing(duration_secs, frame_rate)
+pub fn video_size_options(model: &str) -> &'static [&'static str] {
+    if model == "agnes-video-2.5-flash" {
+        FLASH_VIDEO_SIZES
+    } else {
+        VIDEO_SIZES
+    }
 }
 
 pub fn ratio_option_display(option: &RatioOption) -> String {
@@ -189,83 +152,59 @@ pub fn validate_image_ratio(ratio: &AspectRatio) -> Result<()> {
     }
 }
 
-/// Video dimensions from preset table; unknown ratios snap to 64-multiple 720p tier.
-pub fn video_dimensions(ratio: &AspectRatio) -> Dimensions {
-    lookup_preset(&VIDEO_RATIO_PRESETS, ratio).unwrap_or_else(|| compute_video_dimensions(ratio))
-}
-
-fn compute_video_dimensions(ratio: &AspectRatio) -> Dimensions {
-    let w = ratio.w as f64;
-    let h = ratio.h as f64;
-    let short = 768.0;
-    let (width, height) = if w >= h {
-        let height = snap64(short);
-        let width = snap64(height * w / h);
-        (width, height)
-    } else {
-        let width = snap64(short);
-        let height = snap64(width * h / w);
-        (width, height)
-    };
-    Dimensions { width: width as u32, height: height as u32 }
-}
-
-fn snap64(v: f64) -> f64 {
-    let n = (v / 64.0).round() as i64;
-    (n * 64).max(64) as f64
-}
-
-/// Maximum video frame count (8n+1 rule, capped at 441).
-pub const MAX_VIDEO_FRAMES: u32 = 441;
-
-/// Minimum valid frame count (8n+1 rule).
-pub const MIN_VIDEO_FRAMES: u32 = 9;
-
-/// Snap frame count to nearest valid 8n+1 (max [`MAX_VIDEO_FRAMES`]).
-pub fn snap_num_frames(requested: u32) -> u32 {
-    let clamped = requested.clamp(MIN_VIDEO_FRAMES, MAX_VIDEO_FRAMES);
-    let n = ((clamped as i32 - 1) / 8) as u32;
-    let lower = 8 * n + 1;
-    let upper = 8 * (n + 1) + 1;
-    if upper <= MAX_VIDEO_FRAMES && clamped.saturating_sub(lower) > upper.saturating_sub(clamped) {
-        upper
-    } else {
-        lower
-    }
-}
-
-pub fn duration_from_frames(num_frames: u32, frame_rate: u32) -> f64 {
-    num_frames as f64 / frame_rate as f64
-}
-
-pub fn validate_frame_rate(frame_rate: u32) -> Result<()> {
+pub fn validate_video_ratio(ratio: &AspectRatio) -> Result<()> {
     anyhow::ensure!(
-        (1..=60).contains(&frame_rate),
-        "frame_rate must be 1–60, got {frame_rate}"
+        VIDEO_SUPPORTED_RATIOS.contains(&ratio.label().as_str()),
+        "unsupported video ratio {}, supported: {}",
+        ratio.label(),
+        VIDEO_SUPPORTED_RATIOS.join(", ")
     );
     Ok(())
 }
 
-pub fn max_video_duration(frame_rate: u32) -> Result<u32> {
-    validate_frame_rate(frame_rate)?;
-    Ok(MAX_VIDEO_FRAMES / frame_rate)
+/// Standard-model 720P dimensions for the ratio picker.
+pub fn video_dimensions(ratio: &AspectRatio) -> Dimensions {
+    video_dimensions_for_size(ratio, "720P", false).expect("supported video ratio")
 }
 
-/// Validate requested duration and return snapped frame count + actual duration.
-pub fn resolve_video_timing(duration_secs: f64, frame_rate: u32) -> Result<(u32, f64)> {
-    validate_frame_rate(frame_rate)?;
-    anyhow::ensure!(duration_secs > 0.0, "duration must be positive");
-    let max_dur = max_video_duration(frame_rate)?;
+/// Documented output dimensions; actual generated file dimensions may vary.
+pub fn video_dimensions_for_size(ratio: &AspectRatio, size: &str, flash: bool) -> Result<Dimensions> {
+    validate_video_ratio(ratio)?;
+    let sizes = if flash { FLASH_VIDEO_SIZES } else { VIDEO_SIZES };
     anyhow::ensure!(
-        duration_secs <= max_dur as f64,
-        "duration {duration_secs}s exceeds maximum {max_dur}s at {frame_rate} fps (max {MAX_VIDEO_FRAMES} frames)"
+        sizes.contains(&size),
+        "unsupported video size {size}, supported: {}",
+        sizes.join(", ")
     );
-    let num_frames = frames_from_duration(duration_secs, frame_rate);
-    Ok((num_frames, duration_from_frames(num_frames, frame_rate)))
+    if size == "1K" {
+        return Ok(Dimensions::new(1024, 1024));
+    }
+    let label = ratio.label();
+    let index = VIDEO_SUPPORTED_RATIOS
+        .iter()
+        .position(|value| *value == label)
+        .expect("validated ratio");
+    let standard = [(1470, 630), (1280, 720), (1112, 834), (960, 960), (834, 1112), (720, 1280)];
+    let hd = [(2206, 946), (1920, 1080), (1664, 1248), (1440, 1440), (1248, 1664), (1080, 1920)];
+    let flash_sizes = [(1680, 720), (1280, 704), (960, 720), (720, 720), (720, 960), (720, 1280)];
+    let (width, height) = if flash {
+        flash_sizes[index]
+    } else if size == "1080P" {
+        hd[index]
+    } else {
+        standard[index]
+    };
+    let scale = if size == "2K" { 2 } else { 1 };
+    Ok(Dimensions::new(width * scale, height * scale))
 }
 
-pub fn frames_from_duration(duration_secs: f64, frame_rate: u32) -> u32 {
-    snap_num_frames((duration_secs * frame_rate as f64).round() as u32)
+/// Agnes Video 2.5 accepts integer seconds from 4 through 12.
+pub fn validate_video_duration(duration_secs: f64) -> Result<u32> {
+    anyhow::ensure!(
+        duration_secs.is_finite() && (4.0..=12.0).contains(&duration_secs) && duration_secs.fract() == 0.0,
+        "video duration must be an integer from 4 to 12 seconds"
+    );
+    Ok(duration_secs as u32)
 }
 
 #[cfg(test)]
@@ -292,23 +231,37 @@ mod tests {
     }
 
     #[test]
-    fn video_presets_unchanged() {
-        assert_eq!(video_dimensions(&AspectRatio { w: 1, h: 1 }).size_string(), "768x768");
-        assert_eq!(video_dimensions(&AspectRatio { w: 16, h: 9 }).size_string(), "1280x768");
-        assert_eq!(VIDEO_RATIO_PRESETS.len(), 5);
+    fn video_sizes_and_model_limits() {
+        let ratio = AspectRatio { w: 16, h: 9 };
+        assert_eq!(video_dimensions(&ratio).size_string(), "1280x720");
+        assert_eq!(
+            video_dimensions_for_size(&ratio, "1080P", false).unwrap().size_string(),
+            "1920x1080"
+        );
+        assert_eq!(
+            video_dimensions_for_size(&ratio, "2K", false).unwrap().size_string(),
+            "2560x1440"
+        );
+        assert_eq!(
+            video_dimensions_for_size(&ratio, "1K", false).unwrap().size_string(),
+            "1024x1024"
+        );
+        assert_eq!(
+            video_dimensions_for_size(&ratio, "720P", true).unwrap().size_string(),
+            "1280x704"
+        );
+        assert!(video_dimensions_for_size(&ratio, "1080P", true).is_err());
+        assert!(validate_video_ratio(&AspectRatio { w: 2, h: 3 }).is_err());
+        assert_eq!(video_ratio_options().len(), 6);
     }
 
     #[test]
-    fn snap_frames() {
-        assert_eq!(snap_num_frames(120), 121);
-        assert_eq!(snap_num_frames(500), 441);
-    }
-
-    #[test]
-    fn max_duration_at_24fps() {
-        assert_eq!(max_video_duration(24).unwrap(), 18);
-        assert!(resolve_video_timing(18.0, 24).is_ok());
-        assert!(resolve_video_timing(18.1, 24).is_err());
+    fn video_duration_requires_supported_integer_seconds() {
+        assert_eq!(validate_video_duration(4.0).unwrap(), 4);
+        assert_eq!(validate_video_duration(12.0).unwrap(), 12);
+        for invalid in [0.0, 3.0, 4.5, 13.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_video_duration(invalid).is_err());
+        }
     }
 
     #[test]
@@ -317,20 +270,5 @@ mod tests {
         assert_eq!(options.len(), 8);
         assert!(options.iter().any(|o| o.label == "1:1"));
         assert!(options.iter().any(|o| o.label == "21:9"));
-    }
-
-    #[test]
-    fn video_timing_preview_api() {
-        let (frames, actual) = video_timing_preview(5.0, 24).unwrap();
-        assert!(frames >= 9);
-        assert!(actual > 0.0);
-    }
-
-    #[test]
-    fn frame_rate_range() {
-        assert!(validate_frame_rate(1).is_ok());
-        assert!(validate_frame_rate(60).is_ok());
-        assert!(validate_frame_rate(0).is_err());
-        assert!(validate_frame_rate(61).is_err());
     }
 }

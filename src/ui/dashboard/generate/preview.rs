@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::ratio::{self, AspectRatio, ImageResolutionTier, RatioOption, VIDEO_RESOLUTION_TIER, video_timing_preview};
+use crate::ratio::{self, AspectRatio, ImageResolutionTier, RatioOption};
 
 pub struct ImagePreview {
     #[allow(dead_code)]
@@ -68,59 +68,54 @@ pub fn build_image_preview(
 pub fn build_video_preview(
     ratio_options: &[RatioOption],
     ratio_index: usize,
-    ratio_disabled: bool,
     duration: &str,
-    frame_rate: &str,
+    size: &str,
+    model: &str,
     input_count: usize,
 ) -> VideoPreview {
     let mut error = None;
-    let fps: u32 = frame_rate.trim().parse().unwrap_or(24);
-    let dur: f64 = duration.trim().parse().unwrap_or(5.0);
-
-    let (ratio_label, size, tier, ratio_inferred) = if ratio_disabled {
-        (
-            "(from inputs)".into(),
-            "(from inputs)".into(),
-            VIDEO_RESOLUTION_TIER.into(),
-            true,
-        )
-    } else if let Some(opt) = ratio_options.get(ratio_index) {
-        (
-            opt.label.clone(),
-            opt.dimensions.size_string(),
-            opt.tier.to_string(),
-            false,
-        )
-    } else {
-        error = Some("invalid ratio selection".into());
-        ("-".into(), "-".into(), VIDEO_RESOLUTION_TIER.into(), false)
-    };
-
-    let max_duration = match ratio::video_max_duration_secs(fps) {
-        Ok(max) => format!("{max:.0}s @ {fps}fps"),
+    let ratio_label = ratio_options
+        .get(ratio_index)
+        .map(|opt| opt.label.clone())
+        .unwrap_or_default();
+    let dimensions = AspectRatio::parse(&ratio_label)
+        .and_then(|ratio| ratio::video_dimensions_for_size(&ratio, size, model == "agnes-video-2.5-flash"));
+    let size_label = match dimensions {
+        Ok(dimensions) => dimensions.size_string(),
         Err(err) => {
             error = Some(format!("{err:#}"));
             "-".into()
         }
     };
-
-    let timing = match video_timing_preview(dur, fps) {
-        Ok((frames, actual)) => format!("frames={frames}, actual={actual:.2}s"),
+    let timing = match duration
+        .trim()
+        .parse::<f64>()
+        .map_err(anyhow::Error::from)
+        .and_then(ratio::validate_video_duration)
+    {
+        Ok(seconds) => format!("{seconds}s"),
         Err(err) => {
             error = Some(format!("{err:#}"));
             "-".into()
         }
     };
-
-    let input_note = if input_count == 0 {
-        "text-to-video".into()
-    } else if input_count == 1 {
-        "image-to-video".into()
-    } else {
-        "multi-frame (same ratio)".into()
-    };
-
-    VideoPreview { ratio_label, size, tier, ratio_inferred, timing, max_duration, input_count, input_note, error }
+    let input_note = match input_count {
+        0 => "text",
+        1 => "keyframe",
+        _ => "reference",
+    }
+    .to_string();
+    VideoPreview {
+        ratio_label,
+        size: size_label,
+        tier: size.to_string(),
+        ratio_inferred: false,
+        timing,
+        max_duration: "12s".into(),
+        input_count,
+        input_note,
+        error,
+    }
 }
 
 pub fn default_ratio_index(options: &[RatioOption], label: &str) -> usize {
@@ -158,15 +153,16 @@ mod tests {
     #[test]
     fn video_preview_timing() {
         let options = ratio::video_ratio_options();
-        let preview = build_video_preview(&options, 4, false, "5", "24", 0);
-        assert!(preview.timing.contains("frames="));
-        assert!(preview.max_duration.contains("18"));
+        let preview = build_video_preview(&options, 4, "5", "720P", "agnes-video-2.5", 0);
+        assert_eq!(preview.timing, "5s");
+        assert!(preview.max_duration.contains("12"));
     }
 
     #[test]
-    fn video_preview_inferred_ratio_when_inputs() {
+    fn video_preview_preserves_selected_ratio_with_inputs() {
         let options = ratio::video_ratio_options();
-        let preview = build_video_preview(&options, 0, true, "5", "24", 1);
-        assert!(preview.ratio_inferred);
+        let preview = build_video_preview(&options, 0, "5", "720P", "agnes-video-2.5", 1);
+        assert!(!preview.ratio_inferred);
+        assert_eq!(preview.input_note, "keyframe");
     }
 }

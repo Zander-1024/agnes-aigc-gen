@@ -5,6 +5,7 @@ pub mod types;
 mod video;
 
 pub use image::{ImageRequest, generate_image};
+pub use types::VideoReference;
 pub use video::{VideoRequest, generate_video, refresh_video_task, wait_video_task};
 
 use std::time::Duration;

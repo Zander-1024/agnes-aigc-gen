@@ -7,12 +7,13 @@ use pi_agent::{AgentTool, AgentToolResult};
 use serde_json::{Value, json};
 
 use crate::api::{
-    ApiClient, ImageRequest, VideoRequest, generate_image, generate_video, refresh_video_task, wait_video_task,
+    ApiClient, ImageRequest, VideoReference, VideoRequest, generate_image, generate_video, refresh_video_task,
+    wait_video_task,
 };
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::output::{ImageBatchItem, MAX_IMAGE_BATCH_COUNT, OutputFormat};
-use crate::ratio::{AspectRatio, ImageResolutionTier, validate_frame_rate};
+use crate::ratio::{AspectRatio, ImageResolutionTier, validate_video_duration};
 
 pub fn default_agent_tools() -> Vec<Arc<dyn AgentTool>> {
     let mut tools: Vec<Arc<dyn AgentTool>> = pi_agent::tools::default_tools()
@@ -126,12 +127,25 @@ impl AgentTool for AgnesSubmitVideoTool {
             "type": "object",
             "properties": {
                 "prompt": {"type": "string"},
-                "negative_prompt": {"type": "string"},
                 "ratio": {"type": "string", "default": "16:9"},
-                "duration": {"type": "number", "default": 5},
-                "frame_rate": {"type": "integer", "default": 24},
+                "duration": {"type": "integer", "minimum": 4, "maximum": 12, "default": 5},
+                "model": {"type": "string", "enum": ["agnes-video-2.5", "agnes-video-2.5-flash"]},
+                "mode": {"type": "string", "enum": ["text", "keyframe", "reference"]},
+                "size": {"type": "string", "enum": ["720P", "1080P", "1K", "2K"], "default": "720P"},
+                "first_frame": {"type": "string"},
+                "last_frame": {"type": "string"},
+                "audios": {"type": "array", "items": {"type": "string"}, "default": []},
+                "videos": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "start_seconds": {"type": "number", "minimum": 0},
+                        "require_audio": {"type": "boolean", "default": false}
+                    },
+                    "required": ["url"]
+                }, "default": []},
                 "images": {"type": "array", "items": {"type": "string"}, "default": []},
-                "seed": {"type": "integer", "minimum": 0, "maximum": 999}
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295u64}
             },
             "required": ["prompt"]
         })
@@ -296,24 +310,42 @@ fn generate_image_tool(args: Value) -> Result<Value> {
 
 fn submit_video_tool(args: Value) -> Result<Value> {
     let prompt = required_str(&args, "prompt")?.to_string();
-    let negative_prompt = optional_str(&args, "negative_prompt").map(str::to_string);
     let ratio = AspectRatio::parse(optional_str(&args, "ratio").unwrap_or("16:9"))?;
-    let duration = optional_f64(&args, "duration").unwrap_or(5.0);
-    let frame_rate = optional_u32(&args, "frame_rate").unwrap_or(24);
-    validate_frame_rate(frame_rate)?;
+    let duration = args
+        .get("duration")
+        .map(|value| value.as_f64().context("duration must be a number"))
+        .transpose()?
+        .unwrap_or(5.0);
+    validate_video_duration(duration)?;
     let images = optional_string_array(&args, "images")?;
-    let seed = optional_u32(&args, "seed");
+    let audios = optional_string_array(&args, "audios")?;
+    let videos: Vec<VideoReference> = args
+        .get("videos")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("invalid video reference objects")?
+        .unwrap_or_default();
+    let seed: Option<u32> = args
+        .get("seed")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("seed must be an unsigned 32-bit integer")?;
     let cfg = AppConfig::load()?;
     let api = ApiClient::from_config(cfg)?;
     generate_video(
         &api,
         VideoRequest {
             prompt,
-            negative_prompt,
+            model: optional_str(&args, "model").map(str::to_string),
+            mode: optional_str(&args, "mode").map(str::to_string),
+            size: optional_str(&args, "size").unwrap_or("720P").to_string(),
+            first_frame: optional_str(&args, "first_frame").map(str::to_string),
+            last_frame: optional_str(&args, "last_frame").map(str::to_string),
+            audios,
+            videos,
             seed,
             ratio,
             duration,
-            frame_rate,
             images,
             task_id: None,
             async_mode: true,
@@ -473,10 +505,6 @@ fn optional_usize(args: &Value, key: &str) -> Option<usize> {
     args.get(key).and_then(Value::as_u64).map(|value| value as usize)
 }
 
-fn optional_f64(args: &Value, key: &str) -> Option<f64> {
-    args.get(key).and_then(Value::as_f64)
-}
-
 fn optional_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(Value::as_bool)
 }
@@ -525,6 +553,12 @@ mod tests {
         for tool in default_agent_tools() {
             assert!(tool.requires_permission(), "{} should go through approval", tool.name());
         }
+    }
+
+    #[test]
+    fn video_seed_overflow_fails_before_loading_config() {
+        let error = submit_video_tool(json!({"prompt": "test", "seed": 4294967296u64})).unwrap_err();
+        assert!(error.to_string().contains("seed must be an unsigned 32-bit integer"));
     }
 
     #[test]

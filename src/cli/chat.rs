@@ -41,7 +41,7 @@ pub struct ChatArgs {
     #[arg(long = "no-thinking", conflicts_with = "thinking")]
     pub no_thinking: bool,
 
-    /// Override chat context length, e.g. 256k or 262144.
+    /// Override chat context length, e.g. 512k or 524288.
     #[arg(long = "context-tokens", value_parser = parse_token_arg)]
     pub context_tokens: Option<u32>,
 

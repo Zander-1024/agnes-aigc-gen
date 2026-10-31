@@ -35,7 +35,7 @@ PY
 fi
 
 echo "=== 1/3 Image-to-image ==="
-I2I_JSON=$("$BIN" -v image \
+I2I_JSON=$("$BIN" --verbose image \
   -p "Transform into a watercolor painting with soft pastel colors, preserve composition" \
   --ratio 1:1 \
   -i "$INPUT" 2>"${ROOT}/.smoke-i2i.log")
@@ -49,20 +49,19 @@ echo "OK i2i asset_uri=$ASSET"
 
 echo ""
 echo "=== 2/3 Text-to-video (may take several minutes) ==="
-T2V_JSON=$("$BIN" -v video \
+T2V_JSON=$("$BIN" --verbose video \
   -p "A cinematic shot of ocean waves at sunset, gentle camera drift, warm golden light" \
   --ratio 16:9 \
-  -d 3 \
-  -f 24 2>"${ROOT}/.smoke-t2v.log")
+  -d 5 2>"${ROOT}/.smoke-t2v.log")
 echo "$T2V_JSON"
 echo "$T2V_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('uri','').startswith('http'); print('OK t2v uri=', d['uri'][:80], '...')"
 
 echo ""
 echo "=== 3/3 Image-to-video (may take several minutes) ==="
-I2V_JSON=$("$BIN" -v video \
+I2V_JSON=$("$BIN" --verbose video \
   -p "Subtle natural motion, soft breathing, hair moving gently in breeze" \
   --ratio 1:1 \
-  -d 3 \
+  -d 5 \
   -i "$ASSET" 2>"${ROOT}/.smoke-i2v.log")
 echo "$I2V_JSON"
 echo "$I2V_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('uri','').startswith('http'); print('OK i2v uri=', d['uri'][:80], '...')"

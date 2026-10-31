@@ -25,7 +25,7 @@ use assets::{AssetAction, AssetsView};
 use config::{ConfigAction, ConfigForm};
 use generate::fields::is_submit_key;
 use generate::image::{ImageForm, ImageFormAction};
-use generate::preview::{default_ratio_index, ratio_from_index};
+use generate::preview::ratio_from_index;
 use generate::video::{VideoForm, VideoFormAction};
 use home::HomeMenu;
 use jobs::{ImageJobParams, JobEvent, JobRequest, VideoJobParams, spawn_job};
@@ -443,42 +443,24 @@ impl DashboardApp {
             return;
         }
         self.result.clear_error();
-        let ratio = if self.video_form.ratio_disabled() {
-            match ratio_from_index(
-                &self.video_form.ratio_options,
-                default_ratio_index(&self.video_form.ratio_options, "16:9"),
-            ) {
-                Ok(r) => r,
-                Err(err) => {
-                    self.status = format!("{err:#}");
-                    return;
-                }
-            }
-        } else {
-            match ratio_from_index(&self.video_form.ratio_options, self.video_form.ratio.index) {
-                Ok(r) => r,
-                Err(err) => {
-                    self.status = format!("{err:#}");
-                    return;
-                }
+        let ratio = match ratio_from_index(&self.video_form.ratio_options, self.video_form.ratio.index) {
+            Ok(ratio) => ratio,
+            Err(err) => {
+                self.status = format!("{err:#}");
+                return;
             }
         };
         let output_dir = {
             let v = self.video_form.output_dir.value.trim();
             if v.is_empty() { None } else { Some(v.to_string()) }
         };
-        let negative = {
-            let text = self.video_form.negative.text();
-            let v = text.trim();
-            if v.is_empty() { None } else { Some(v.to_string()) }
-        };
         let async_mode = self.video_form.async_mode;
         let handle = spawn_job(JobRequest::Video(VideoJobParams {
             prompt: self.video_form.prompt.text(),
-            negative_prompt: negative,
+            model: self.video_form.model.current().to_string(),
+            size: self.video_form.size.current().to_string(),
             ratio,
             duration: self.video_form.duration_value(),
-            frame_rate: self.video_form.frame_rate_value(),
             images: self.video_form.inputs.raw_values(),
             seed: self.video_form.seed_value(),
             output_dir,

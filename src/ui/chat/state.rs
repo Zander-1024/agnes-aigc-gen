@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn manual_retry_reuses_saved_history_without_duplicate_user_prompt() {
         let mut state = ChatUiState::default();
-        let mut session = crate::agent::session::ChatSession::new("agnes-2.0-flash", true);
+        let mut session = crate::agent::session::ChatSession::new("agnes-3.0-flash", true);
         session.messages = vec![
             Message::user_text("previous context"),
             Message::user_text("retry me"),

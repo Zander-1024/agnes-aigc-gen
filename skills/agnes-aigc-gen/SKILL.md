@@ -1,15 +1,15 @@
 ---
 name: agnes-aigc-gen
 description: >-
-  Generates images and videos through the agnes-aigc-gen CLI (Agnes AI API).
-  Use when calling image/video generation, batch images, image-to-video with asset://,
+  Uses the agnes-aigc-gen CLI for image/video generation and text-model image understanding.
+  Use for batch images, image-to-video with asset://, chat image attachments,
   or parsing CLI JSON output. For installing the tool, skill, or API key setup, read
   SETUP.md in the same directory — not this file.
 ---
 
 # agnes-aigc-gen
 
-CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
+CLI for [Agnes AI](https://agnes-ai.com) text chat, image understanding, and image/video generation.
 
 > **Install & config:** see [SETUP.md](./SETUP.md) in this directory.
 > **API reference:** in the repository, read `docs/models/agnes-image-2.5-flash.md` for image parameters, `docs/models/agnes-video-2.5.md` and `docs/models/agnes-video-2.5-flash.md` for video modes and limits, or `docs/models/agnes-3.0-flash.md` for text chat. Installed skills can use the official links in **Models & endpoints**.
@@ -37,6 +37,7 @@ CLI for [Agnes AI](https://agnes-ai.com) image and video generation.
 | **Downloads** | `--save` on command; not `config save-local` |
 | **`num_inference_steps`** | Not supported by CLI; never sent for image or video |
 | **Chat video tools** | Prefer async video submission; use task tools to follow progress |
+| **Chat vision** | `chat -i` / `--image`: URL, local image, bare Base64, `base64:...`, or Data URI; repeat `-i` for multiple images |
 
 **Preconditions:** CLI on PATH, API key configured (see SETUP.md).
 
@@ -59,6 +60,8 @@ Every option has a **long form** (`--prompt`, `--ratio`, …). Short forms (`-p`
 | video | `-i` | `--image` |
 | video | | `--model`, `--mode`, `--size` |
 | video | | `--first-frame`, `--last-frame`, `--audio`, `--video` |
+| chat | `-p` | `--prompt` |
+| chat | `-i` | `--image` |
 
 ## Global flags
 
@@ -320,6 +323,10 @@ agnes-aigc-gen history list
 ```bash
 agnes-aigc-gen chat
 agnes-aigc-gen chat --prompt "Create image concepts, generate one, then submit i2v"
+agnes-aigc-gen chat -p "Describe this image" -i https://example.com/photo.jpg
+agnes-aigc-gen chat -p "Compare these images" -i ./first.png -i ./second.jpg
+agnes-aigc-gen chat -p "Read this image" -i "data:image/png;base64,BASE64_HERE"
+agnes-aigc-gen chat -i ./photo.png   # TUI: attach to the next user message
 agnes-aigc-gen chat --auto
 agnes-aigc-gen chat --no-thinking --context-tokens 128k --max-output-tokens 16k
 agnes-aigc-gen chat --resume <session-id>
@@ -329,12 +336,18 @@ Chat is a PI-based terminal agent with:
 
 - PI coding tools: `read`, `write`, `edit`, `bash`, `web_fetch`, `todo`, search/list tools
 - Agnes tools: `agnes_generate_image`, `agnes_submit_video`, `agnes_task_list/show/wait`, `agnes_asset_list/show`, `agnes_history_list/show`, `load_skill`
-- Slash commands: `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/compress`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`
+- Slash commands: `/image <input>`, `/images`, `/images clear`, `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/compress`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`
 - TUI keys: `Tab` completes slash commands, `Shift-Tab` or `/approval toggle` switches approval mode (review ↔ auto; dangerous commands still reviewed in auto), `Ctrl-R` retries the previous request without adding another user message to session history, `Ctrl-T` toggles thinking details, `Ctrl-E` toggles tool-call details, `Ctrl-Q` quits
 - Approval panel: `←/→` selects Approve / Allow session / Deny, `Enter` confirms, `↑/↓` or `PgUp/PgDn` scrolls arguments; `y`/`a`/`n` shortcuts still work
 - Context: header shows context usage % and cache hit; auto-compresses session history at ≥90% (see [`docs/chat-context-compression.md`](../../docs/chat-context-compression.md)); `/compress` forces compression
 - Thinking and tool details are folded by default; expand them when auditing agent behavior
 - Chat completion requests automatically try up to 3 total attempts for retryable network failures, `408`, `429`, and `5xx` responses before surfacing an error
+
+### Chat image attachments
+
+`chat -i` / `--image` accepts a URL, local image path, bare Base64, `base64:...`, or full Data URI. Use one image per `-i` argument and repeat the flag for multiple images. Commas inside a URL, filename, or Data URI are preserved. Local/inline PNG/JPEG/WebP images are validated and encoded into `image_url` content parts, preserving their bytes and MIME type; remote URLs are forwarded directly. Chat image understanding calls the text endpoint and does not call image generation.
+
+In the TUI, attach an image with `/image <input>`; the rest of the line is one input, so paths may contain spaces. Matching outer quotes are accepted. `/images` lists pending images without dumping Base64, and `/images clear` clears them. Pending images attach to the next message and are consumed when that request is built successfully. `/new` and `/resume` clear unsent attachments. Retrying uses the saved request with its images; saved sessions retain image content for later turns. Context compression can replace older image content with an `[image]` summary.
 
 Model defaults:
 

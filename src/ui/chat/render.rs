@@ -56,16 +56,21 @@ pub(crate) fn render(frame: &mut ratatui::Frame, state: &mut ChatUiState) {
 }
 
 fn input_title(state: &ChatUiState) -> Line<'static> {
+    let title = if state.pending_images.is_empty() {
+        "Message".to_string()
+    } else {
+        format!("Message · {} image(s) queued", state.pending_images.len())
+    };
     if state.busy {
         Line::from(vec![
-            Span::raw("Message "),
+            Span::raw(format!("{title} ")),
             Span::styled(
                 format!("({})", activity_status(state)),
                 Style::default().fg(Color::Yellow),
             ),
         ])
     } else {
-        Line::from("Message")
+        Line::from(title)
     }
 }
 

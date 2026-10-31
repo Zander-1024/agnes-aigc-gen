@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Text-model image understanding through `chat -i/--image` with image URLs, local files, Base64, and Data URIs.
+- Interactive chat image attachments via `/image`, `/images`, and `/images clear`, with images retained across retries and saved sessions.
+
 ### Fixed
 
 - Preserve the comma inside image Base64 Data URIs when parsing input lists; reject missing payloads before generation.

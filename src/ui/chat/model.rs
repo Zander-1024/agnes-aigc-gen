@@ -10,6 +10,7 @@ use pi_agent::PermissionDecision;
 #[derive(Debug, Clone)]
 pub struct ChatUiOptions {
     pub resume: Option<String>,
+    pub images: Vec<String>,
     pub auto: bool,
     pub max_turns: u32,
     pub overrides: ChatOverrides,
@@ -18,7 +19,7 @@ pub struct ChatUiOptions {
 impl From<ChatArgs> for ChatUiOptions {
     fn from(args: ChatArgs) -> Self {
         let overrides = args.overrides();
-        Self { resume: args.resume, auto: args.auto, max_turns: args.max_turns, overrides }
+        Self { resume: args.resume, images: args.images, auto: args.auto, max_turns: args.max_turns, overrides }
     }
 }
 

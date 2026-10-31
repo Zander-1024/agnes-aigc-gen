@@ -5,7 +5,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::Args;
 use pi_agent::{AgentEvent, PermissionDecision, PermissionPolicy};
-use pi_ai::Message;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -13,6 +12,7 @@ use crate::agent::approval::{ApprovalDecision, ApprovalPolicy};
 use crate::agent::chat::{ChatOverrides, build_agent_config};
 use crate::agent::runner::run_agnes_agent_with_history;
 use crate::agent::session::{ChatSession, load_session, save_session};
+use crate::agent::vision::build_user_message;
 use crate::config::{AppConfig, parse_token_limit};
 
 #[derive(Args, Debug, Clone)]
@@ -20,6 +20,10 @@ pub struct ChatArgs {
     /// One-shot prompt. Omit to launch the TUI.
     #[arg(short, long)]
     pub prompt: Option<String>,
+
+    /// Image to understand: HTTP(S) URL, local PNG/JPEG/WebP, Base64, or Data URI (repeatable)
+    #[arg(short = 'i', long = "image")]
+    pub images: Vec<String>,
 
     /// Resume a saved chat session id.
     #[arg(long)]
@@ -75,6 +79,7 @@ pub fn run(args: ChatArgs) -> Result<()> {
 }
 
 async fn run_prompt(args: ChatArgs) -> Result<()> {
+    let message = build_user_message(args.prompt.as_deref().unwrap_or_default(), &args.images)?;
     let cfg = AppConfig::load()?;
     let workspace = std::env::current_dir()?;
     let permission = Arc::new(CliPermission::new(if args.auto {
@@ -87,9 +92,8 @@ async fn run_prompt(args: ChatArgs) -> Result<()> {
         Some(id) => load_session(id)?,
         None => ChatSession::new(&agent.runtime.model.id, agent.runtime.enable_thinking),
     };
-    let prompt = args.prompt.clone().unwrap_or_default();
     let mut history = session.messages.clone();
-    history.push(Message::user_text(prompt));
+    history.push(message);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let agent_for_task = agent.clone();
@@ -188,4 +192,36 @@ fn prompt_permission(
 
 fn parse_token_arg(value: &str) -> std::result::Result<u32, String> {
     parse_token_limit(value).map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct ChatCommand {
+        #[command(flatten)]
+        args: ChatArgs,
+    }
+
+    #[test]
+    fn repeated_image_flags_preserve_urls_paths_and_data_uris() {
+        let values =
+            ["https://example.com/image.png?crop=1,2,3,4", "./my pictures/photo,one.png", "data:image/png;base64,YWJj"];
+        let command = ChatCommand::try_parse_from([
+            "chat", "-p", "compare", "-i", values[0], "--image", values[1], "-i", values[2],
+        ])
+        .unwrap();
+        assert_eq!(command.args.prompt.as_deref(), Some("compare"));
+        assert_eq!(command.args.images, values);
+    }
+
+    #[test]
+    fn image_flags_without_prompt_queue_attachments_for_the_tui() {
+        let command = ChatCommand::try_parse_from(["chat", "-i", "./photo.png"]).unwrap();
+        assert!(command.args.prompt.is_none());
+        let options: crate::ui::chat::ChatUiOptions = command.args.into();
+        assert_eq!(options.images, ["./photo.png"]);
+    }
 }

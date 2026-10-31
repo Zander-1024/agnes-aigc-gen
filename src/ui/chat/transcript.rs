@@ -160,7 +160,7 @@ pub(crate) fn render_styled_prefixed(prefix: &str, text: &str, width: usize, sty
 
 pub(crate) fn intro_text(state: &ChatUiState) -> String {
     format!(
-        "Welcome to Agnes Chat.\n\nAsk for code changes, image generation, async video tasks, asset/history lookup, or skill loading.\n\nTab completes slash commands. /retry or Ctrl-R retries the previous request without adding another user message to the session. Ctrl-T toggles thinking visibility. Ctrl-E toggles tool details. Current approval mode: {}.",
+        "Welcome to Agnes Chat.\n\nAsk for code changes, image understanding, image generation, async video tasks, asset/history lookup, or skill loading. Use /image <URL, path, or Base64> to attach an image, then send your question. /images lists queued images.\n\nTab completes slash commands. /retry or Ctrl-R retries the previous request without adding another user message to the session. Ctrl-T toggles thinking visibility. Ctrl-E toggles tool details. Current approval mode: {}.",
         state.telemetry.approval_label
     )
 }

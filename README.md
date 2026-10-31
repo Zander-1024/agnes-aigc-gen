@@ -10,7 +10,7 @@ CLI and terminal dashboard for [Agnes AI](https://agnes-ai.com) text chat, image
 - **Batch images** — `-n` / `--count` 1–4 concurrent calls with partial-failure JSON
 - **Structured output** — JSON with `ratio`, `size`, `uri`, `asset_uri`; remote URL by default (`--save` to download)
 - **Asset history** — SQLite `asset://` references for image → video workflows
-- **Agent chat TUI** — PI-based terminal agent with tool calls, skills, approvals, thinking mode, and async video submission
+- **Agent chat TUI** — PI-based terminal agent with image understanding, tool calls, skills, approvals, thinking mode, and async video submission
 - **Encrypted config** — API key encrypted, machine-bound (see config dir in [SETUP.md](docs/SETUP.md))
 - **Dashboard** — `agnes-aigc-gen dashboard` (ratatui terminal UI)
 - **Agent skill** — Cursor skill under `skills/agnes-aigc-gen/`
@@ -131,6 +131,9 @@ agnes-aigc-gen dashboard
 # Agent chat TUI
 agnes-aigc-gen chat
 agnes-aigc-gen chat --prompt "Generate a portrait, then submit a short i2v video"
+agnes-aigc-gen chat -p "Describe this image" -i https://example.com/photo.jpg
+agnes-aigc-gen chat -p "Compare these images" -i ./first.png -i ./second.jpg
+agnes-aigc-gen chat -p "Read the text in this image" -i "data:image/png;base64,BASE64_HERE"
 agnes-aigc-gen chat --no-thinking --context-tokens 128k --max-output-tokens 16k
 agnes-aigc-gen chat --auto
 ```
@@ -163,6 +166,10 @@ Video does not upload local files or call the image API to stage frames. Generat
 
 `agnes-aigc-gen chat` launches a PI-based terminal agent. It can use PI coding tools (`read`, `write`, `edit`, `bash`, `web_fetch`, `todo`) plus Agnes tools for image generation, async video submission, assets, history, tasks, and skill loading.
 
+For image understanding, `chat -i` / `--image` accepts image URLs, local files, bare Base64, `base64:...`, or complete `data:image/...;base64,...` URIs. Repeat `-i` for multiple images; each argument is one image, preserving commas in URLs, filenames, and Data URIs. Local and inline PNG/JPEG/WebP inputs are validated and encoded as image content with their original bytes and MIME type; public URLs are forwarded without downloading or staging them through the image-generation API.
+
+`chat -i ./photo.png` opens the TUI with an image pending for your next message. In the TUI, `/image <input>` attaches another image, `/images` lists pending attachments, and `/images clear` removes them. A path containing spaces can be entered directly after `/image` or enclosed in matching quotes. Sending consumes pending attachments; `/new` and `/resume` clear unsent attachments. Retry and saved sessions retain images already sent. Older images can be summarized as `[image]` during context compression.
+
 Approval modes:
 
 | Mode | Behavior |
@@ -173,7 +180,7 @@ Approval modes:
 
 Dangerous examples include force push, retagging, `git reset --hard`, `git clean`, `rm -rf`, `sudo`, `curl | sh`, publish/release commands, and writes outside the workspace.
 
-Useful slash commands in the TUI: `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`.
+Useful slash commands in the TUI: `/image <input>`, `/images`, `/images clear`, `/help`, `/new`, `/sessions`, `/resume <id>`, `/skills`, `/skill <name>`, `/tools`, `/approval`, `/model`, `/thinking`, `/tasks`, `/retry`, `/quit`.
 
 TUI keys: `Tab` completes slash commands, `Ctrl-R` retries the previous request without adding another user message to session history, `Ctrl-T` toggles thinking details, `Ctrl-E` toggles tool-call details, and `Ctrl-Q` quits. Thinking and tool details are folded by default to keep the conversation readable.
 

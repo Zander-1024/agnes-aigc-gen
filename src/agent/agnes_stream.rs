@@ -411,8 +411,7 @@ fn convert_messages(system_prompt: Option<&str>, messages: &[Message]) -> Vec<Va
     for message in messages {
         match message {
             Message::User { content, .. } => {
-                let text = text_content(content);
-                out.push(json!({"role": "user", "content": text}));
+                out.push(json!({"role": "user", "content": user_content(content)}));
             }
             Message::Assistant(assistant) => {
                 let mut text = String::new();
@@ -451,6 +450,28 @@ fn convert_messages(system_prompt: Option<&str>, messages: &[Message]) -> Vec<Va
     out
 }
 
+fn user_content(content: &[Content]) -> Value {
+    if !content.iter().any(|part| matches!(part, Content::Image { .. })) {
+        return json!(text_content(content));
+    }
+    let parts: Vec<Value> = content
+        .iter()
+        .filter_map(|part| match part {
+            Content::Text { text } => Some(json!({"type": "text", "text": text})),
+            Content::Image { data, mime_type } => {
+                let url = if data.starts_with("https://") || data.starts_with("http://") || data.starts_with("data:") {
+                    data.clone()
+                } else {
+                    format!("data:{mime_type};base64,{data}")
+                };
+                Some(json!({"type": "image_url", "image_url": {"url": url}}))
+            }
+            _ => None,
+        })
+        .collect();
+    json!(parts)
+}
+
 fn text_content(content: &[Content]) -> String {
     content.iter().filter_map(Content::as_text).collect::<Vec<_>>().join("")
 }
@@ -463,7 +484,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
@@ -513,6 +534,78 @@ mod tests {
 
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["function"]["name"], "agnes_task_list");
+    }
+
+    #[test]
+    fn vision_content_preserves_text_image_order_and_input_forms() {
+        let content = vec![
+            Content::text("Compare these images"),
+            Content::Image { data: "https://example.com/photo.png".into(), mime_type: "image/*".into() },
+            Content::text("with this local image"),
+            Content::Image { data: "aW1hZ2U=".into(), mime_type: "image/jpeg".into() },
+            Content::Image { data: "data:image/png;base64,cG5n".into(), mime_type: "image/png".into() },
+        ];
+        assert_eq!(
+            user_content(&content),
+            json!([
+                {"type": "text", "text": "Compare these images"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/photo.png"}},
+                {"type": "text", "text": "with this local image"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aW1hZ2U="}},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,cG5n"}}
+            ])
+        );
+        assert_eq!(
+            user_content(&[Content::text("plain "), Content::text("text")]),
+            json!("plain text")
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_sends_vision_history_and_text_followup_to_chat_completions() {
+        let server = RetryServer::spawn(vec![200]);
+        let model = Model::openai_compat("agnes", "agnes-3.0-flash", server.base_url(), 1, 1);
+        let ctx = Context {
+            system_prompt: Some("Analyze the supplied pictures".into()),
+            messages: vec![
+                Message::User {
+                    content: vec![
+                        Content::text("Describe these"),
+                        Content::Image { data: "https://example.com/photo.png".into(), mime_type: "image/*".into() },
+                        Content::Image { data: "aW1hZ2U=".into(), mime_type: "image/jpeg".into() },
+                    ],
+                    timestamp: 0,
+                },
+                Message::user_text("Which one is brighter?"),
+            ],
+            tools: vec![],
+        };
+        let options = AgnesStreamOptions {
+            stream: StreamOptions {
+                api_key: Some("test-key".into()),
+                base_url: Some(server.base_url()),
+                ..StreamOptions::default()
+            },
+            enable_thinking: false,
+        };
+        let mut stream = stream_agnes(&model, &ctx, &options).await.unwrap();
+        while let Some(event) = stream.next().await {
+            if matches!(event.unwrap(), AssistantMessageEvent::Done { .. }) {
+                break;
+            }
+        }
+
+        let bodies = server.requests();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(
+            bodies[0]["messages"][1]["content"][1]["image_url"]["url"],
+            "https://example.com/photo.png"
+        );
+        assert_eq!(
+            bodies[0]["messages"][1]["content"][2]["image_url"]["url"],
+            "data:image/jpeg;base64,aW1hZ2U="
+        );
+        assert_eq!(bodies[0]["messages"][2]["content"], "Which one is brighter?");
     }
 
     #[tokio::test]
@@ -566,9 +659,33 @@ mod tests {
         assert_eq!(server.attempts(), 3);
     }
 
+    fn read_request_body(stream: &mut std::net::TcpStream) -> Value {
+        let mut request = Vec::new();
+        let mut buf = [0; 2048];
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "incomplete HTTP request");
+            request.extend_from_slice(&buf[..n]);
+            if let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                let length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                    .unwrap();
+                let body_start = header_end + 4;
+                if request.len() >= body_start + length {
+                    return serde_json::from_slice(&request[body_start..body_start + length]).unwrap();
+                }
+            }
+        }
+    }
+
     struct RetryServer {
         addr: std::net::SocketAddr,
         attempts: Arc<AtomicUsize>,
+        requests: Arc<Mutex<Vec<Value>>>,
     }
 
     impl RetryServer {
@@ -577,13 +694,14 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let attempts = Arc::new(AtomicUsize::new(0));
             let attempts_for_thread = attempts.clone();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let requests_for_thread = requests.clone();
             thread::spawn(move || {
                 for status in statuses {
                     let (mut stream, _) = listener.accept().unwrap();
                     attempts_for_thread.fetch_add(1, Ordering::SeqCst);
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                    let mut buf = [0; 2048];
-                    let _ = stream.read(&mut buf);
+                    requests_for_thread.lock().unwrap().push(read_request_body(&mut stream));
                     if status == 200 {
                         let body = concat!(
                             "data: {\"model\":\"agnes-3.0-flash\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
@@ -604,7 +722,11 @@ mod tests {
                     }
                 }
             });
-            Self { addr, attempts }
+            Self { addr, attempts, requests }
+        }
+
+        fn requests(&self) -> Vec<Value> {
+            self.requests.lock().unwrap().clone()
         }
 
         fn base_url(&self) -> String {

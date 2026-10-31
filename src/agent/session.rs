@@ -126,6 +126,29 @@ mod tests {
     use pi_ai::Message;
 
     #[test]
+    fn session_roundtrip_preserves_images_for_multiturn_resume() {
+        let dir = std::env::temp_dir().join(format!("agnes-chat-vision-session-{}", pi_ai::now_ms()));
+        let content = vec![
+            pi_ai::Content::text("Compare these images"),
+            pi_ai::Content::Image { data: "https://example.com/photo.png".into(), mime_type: "image/*".into() },
+            pi_ai::Content::Image { data: "aW1hZ2U=".into(), mime_type: "image/jpeg".into() },
+        ];
+        let mut session = ChatSession::new("agnes-3.0-flash", true);
+        session
+            .messages
+            .push(Message::User { content: content.clone(), timestamp: 0 });
+        session.messages.push(Message::user_text("Which is brighter?"));
+        save_session_to_dir(&dir, &session).unwrap();
+        let loaded = load_session_from_dir(&dir, &session.id).unwrap();
+        let Message::User { content: restored, .. } = &loaded.messages[0] else {
+            panic!("expected user message");
+        };
+        assert_eq!(restored, &content);
+        assert_eq!(loaded.messages.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn session_roundtrip_keeps_messages() {
         let dir = std::env::temp_dir().join(format!("agnes-chat-session-{}", pi_ai::now_ms()));
         let mut session = ChatSession::new("agnes-3.0-flash", true);

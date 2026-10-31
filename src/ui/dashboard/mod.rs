@@ -691,6 +691,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<()> {
             ratatui::restore();
             return crate::ui::chat::run(ChatUiOptions {
                 resume: None,
+                images: Vec::new(),
                 auto: false,
                 max_turns: 32,
                 overrides: Default::default(),

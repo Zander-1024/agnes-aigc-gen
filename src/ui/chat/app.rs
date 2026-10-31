@@ -17,6 +17,7 @@ use crate::agent::chat::{build_agent_config, build_system_prompt};
 use crate::agent::context::{estimate_tokens, maybe_compress, should_auto_compress};
 use crate::agent::runner::run_agnes_agent_with_history;
 use crate::agent::session::{ChatSession, load_session, save_session};
+use crate::agent::vision::build_user_message;
 use crate::config::AppConfig;
 
 use super::approval::UiPermission;
@@ -74,6 +75,7 @@ fn run_app(terminal: &mut DefaultTerminal, runtime: &tokio::runtime::Runtime, op
         transcript: ScrollView { pinned_to_bottom: true, ..Default::default() },
         input: InputState { blink_at: Instant::now(), ..Default::default() },
         auto_mode: options.auto,
+        pending_images: options.images.clone(),
         ..ChatUiState::default()
     };
     if let Some(session) = &state.session {
@@ -219,7 +221,7 @@ fn handle_key(
             state.set_input_cursor(0);
             state.reset_input_history_navigation();
             state.input.completion_hint = None;
-            if input.is_empty() {
+            if input.is_empty() && state.pending_images.is_empty() {
                 return Ok(false);
             }
             if input == "/retry" {
@@ -265,25 +267,53 @@ fn submit_prompt(
         state.status = activity_status(state);
         return Ok(());
     }
+    let message = match build_user_message(&input, &state.pending_images) {
+        Ok(message) => message,
+        Err(err) => {
+            state.push_line(ChatLineKind::Error, format!("{err:#}"));
+            state.input.buffer = input;
+            state.sync_input_cursor_end();
+            return Ok(());
+        }
+    };
     let agent = match build_ui_agent(state, cfg, options, tx.clone()) {
         Ok(agent) => agent,
         Err(err) => {
             state.push_line(ChatLineKind::Error, format!("{err:#}"));
+            state.input.buffer = input;
+            state.sync_input_cursor_end();
             return Ok(());
         }
     };
     let mut session = state
         .session
-        .take()
+        .clone()
         .unwrap_or_else(|| ChatSession::new(&agent.runtime.model.id, agent.runtime.enable_thinking));
     session.model = agent.runtime.model.id.clone();
     session.thinking = agent.runtime.enable_thinking;
-    state.push_user(&input);
     let mut history = session.messages.clone();
-    history.push(Message::user_text(input.clone()));
-    prepare_agent_history(state, &mut history)?;
-    state.last_request = Some(RetryRequest { input, history: history.clone() });
+    history.push(message);
+    if let Err(err) = prepare_agent_history(state, &mut history) {
+        state.push_line(ChatLineKind::Error, format!("{err:#}"));
+        state.input.buffer = input;
+        state.sync_input_cursor_end();
+        return Ok(());
+    }
+    let display = user_message_label(&input, state.pending_images.len());
+    state.push_user(&display);
+    state.pending_images.clear();
+    state.last_request = Some(RetryRequest { input: display, history: history.clone() });
     start_agent_run(state, agent, session, history, tx, runtime, "Running agent...")
+}
+
+fn user_message_label(input: &str, image_count: usize) -> String {
+    if image_count == 0 {
+        input.to_string()
+    } else if input.is_empty() {
+        format!("[{image_count} image(s)]")
+    } else {
+        format!("{input}\n[{image_count} image(s)]")
+    }
 }
 
 fn prepare_agent_history(state: &mut ChatUiState, history: &mut Vec<Message>) -> Result<()> {
@@ -505,4 +535,47 @@ fn handle_ui_event(state: &mut ChatUiState, event: UiEvent) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_image_preparation_keeps_pending_images_prompt_and_session() {
+        let missing = std::env::temp_dir().join(format!("agnes-missing-image-{}.png", rand::random::<u64>()));
+        let image = missing.display().to_string();
+        let mut session = ChatSession::new("agnes-3.0-flash", true);
+        session.messages.push(Message::user_text("earlier context"));
+        let session_id = session.id.clone();
+        let mut state =
+            ChatUiState { pending_images: vec![image.clone()], session: Some(session), ..Default::default() };
+        let options = ChatUiOptions {
+            resume: None,
+            images: Vec::new(),
+            auto: false,
+            max_turns: 4,
+            overrides: Default::default(),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (tx, _) = mpsc::unbounded_channel();
+
+        submit_prompt(
+            &mut state,
+            &AppConfig::default(),
+            &options,
+            "describe this".into(),
+            tx,
+            &runtime,
+        )
+        .unwrap();
+
+        assert_eq!(state.pending_images, vec![image]);
+        assert_eq!(state.input.buffer, "describe this");
+        assert_eq!(state.session.as_ref().unwrap().id, session_id);
+        assert_eq!(state.session.as_ref().unwrap().messages.len(), 1);
+        assert!(!state.busy);
+        assert!(state.last_request.is_none());
+        assert_eq!(state.lines.last().unwrap().kind, ChatLineKind::Error);
+    }
 }

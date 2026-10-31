@@ -25,6 +25,7 @@ pub struct ChatUiState {
     pub(crate) session: Option<crate::agent::session::ChatSession>,
     pub(crate) busy: bool,
     pub(crate) last_request: Option<RetryRequest>,
+    pub(crate) pending_images: Vec<String>,
     pub(crate) loaded_skills: Vec<String>,
     pub(crate) overrides: ChatOverrides,
     pub(crate) thinking_expanded: bool,
@@ -46,6 +47,7 @@ impl Default for ChatUiState {
             session: None,
             busy: false,
             last_request: None,
+            pending_images: Vec::new(),
             loaded_skills: Vec::new(),
             overrides: ChatOverrides::default(),
             thinking_expanded: false,
@@ -259,15 +261,34 @@ mod tests {
             Message::user_text("retry me"),
         ];
         state.session = Some(session);
+        let mut multimodal = Message::user_text("retry me");
+        if let Message::User { content, .. } = &mut multimodal {
+            content.push(pi_ai::Content::Image {
+                data: "https://example.com/image.png".into(),
+                mime_type: "image/*".into(),
+            });
+        }
         state.last_request = Some(RetryRequest {
             input: "retry me".into(),
-            history: vec![Message::user_text("previous context"), Message::user_text("retry me")],
+            history: vec![Message::user_text("previous context"), multimodal],
         });
 
         let retry = state.last_request_for_retry().unwrap();
 
         assert_eq!(retry.history.len(), 2);
         assert_eq!(user_message_count(&retry.history, "retry me"), 1);
+        let image_count: usize = retry
+            .history
+            .iter()
+            .map(|message| match message {
+                Message::User { content, .. } => content
+                    .iter()
+                    .filter(|part| matches!(part, pi_ai::Content::Image { .. }))
+                    .count(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(image_count, 1);
     }
 
     #[test]

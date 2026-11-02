@@ -36,7 +36,7 @@ pub struct GenerationRecord {
     pub created_at: String,
 }
 
-/// Local record of an Agnes video async task (`POST /videos` → poll `GET /videos/{id}`).
+/// Local record of an Agnes video async task (`POST /v1/videos` → poll `GET /agnesapi`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoTaskRecord {
     /// Local short id (1, 2, 3…); use with `task show 3` / `task wait 3`.

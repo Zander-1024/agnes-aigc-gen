@@ -55,18 +55,10 @@ impl ChatRuntimeConfig {
         } else {
             config.text_model.as_str()
         };
-        let model = Model::openai_compat(
-            "agnes",
-            model_id,
-            config.base_url.clone(),
-            context_tokens,
-            max_output_tokens,
-        );
-        let stream = StreamOptions {
-            max_tokens: Some(max_output_tokens),
-            base_url: Some(config.base_url.clone()),
-            ..StreamOptions::default()
-        };
+        let base_url = crate::api::endpoints::v1_endpoint(&config.base_url, "")?;
+        let model = Model::openai_compat("agnes", model_id, base_url.clone(), context_tokens, max_output_tokens);
+        let stream =
+            StreamOptions { max_tokens: Some(max_output_tokens), base_url: Some(base_url), ..StreamOptions::default() };
         Ok(Self { model, stream, enable_thinking })
     }
 
@@ -158,6 +150,23 @@ mod tests {
         assert_eq!(runtime.model.context_window, 524_288);
         assert_eq!(runtime.model.max_tokens, 65_536);
         assert_eq!(runtime.stream.max_tokens, Some(65_536));
+    }
+
+    #[test]
+    fn chat_runtime_normalizes_gateway_and_versioned_base_urls() {
+        for base_url in
+            ["https://example.com", "https://example.com/", "https://example.com/v1", "https://example.com/v1/"]
+        {
+            let cfg = AppConfig { base_url: base_url.into(), ..AppConfig::default() };
+            let runtime = ChatRuntimeConfig::from_app_config(&cfg, ChatOverrides::default()).unwrap();
+            assert_eq!(runtime.model.base_url, "https://example.com/v1");
+            assert_eq!(runtime.stream.base_url.as_deref(), Some("https://example.com/v1"));
+        }
+
+        let cfg = AppConfig { base_url: "https://example.com/proxy/v1/".into(), ..AppConfig::default() };
+        let runtime = ChatRuntimeConfig::from_app_config(&cfg, ChatOverrides::default()).unwrap();
+        assert_eq!(runtime.model.base_url, "https://example.com/proxy/v1");
+        assert_eq!(runtime.stream.base_url.as_deref(), Some("https://example.com/proxy/v1"));
     }
 
     #[test]

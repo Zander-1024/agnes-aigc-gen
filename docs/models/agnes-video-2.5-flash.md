@@ -14,7 +14,7 @@
 | 查询 | `/agnesapi?video_id=<ID>&model_name=agnes-video-2.5-flash` |
 | 结果 | `status=completed` 时读取顶层 `url` |
 
-查询应保留创建时的模型名，尤其首尾帧与参考模式。Flash 的像素映射与普通版不同；例如官方记录的 `16:9` 输出为 `1280x704`，实际尺寸以文件为准。
+CLI 兼容不带 `/v1` 和末尾带 `/v1` 的 `base_url`，全部模式统一向同一网关的 `/agnesapi` 查询，并保留创建时的模型名。Flash 的像素映射与普通版不同；例如官方记录的 `16:9` 输出为 `1280x704`，实际尺寸以文件为准。
 
 ```bash
 agnes-aigc-gen video --model agnes-video-2.5-flash -p "海浪轻轻拍打沙滩，环境声自然" -d 5 --size 720P

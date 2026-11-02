@@ -139,10 +139,12 @@ Example user message:
 
 | Endpoint | When |
 |----------|------|
-| `POST {base_url}/images/generations` | Image |
-| `POST {base_url}/videos` + poll `GET https://apihub.agnes-ai.com/agnesapi?video_id=…` | Video |
+| `POST {gateway}/v1/chat/completions` | Chat |
+| `POST {gateway}/v1/images/generations` | Image |
+| `POST {gateway}/v1/videos` | Video creation |
+| `GET {gateway}/agnesapi?video_id=…&model_name=…` | Video queries, all modes and ID prefixes |
 
-Default `base_url`: `https://apihub.agnes-ai.com/v1`.
+Default `base_url`: `https://apihub.agnes-ai.com`. Existing values ending in `/v1` and trailing slashes are accepted. Here `{gateway}` is the configured base URL with the optional trailing `/v1` and slashes removed; the CLI constructs the endpoint paths above. Queries use the configured gateway, including custom domains.
 
 ### Before calling
 
@@ -272,7 +274,7 @@ Video ratios: `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`. `1K` is fixed `1024x1
 
 ### Async tasks and polling
 
-Creation returns Agnes `video_id`. The CLI prints it as `task_id` alongside SQLite local `id` (1, 2, 3…). Polling uses `/agnesapi?video_id=...&model_name=...`, with the model saved at task creation. Completion uses top-level `status`, `progress`, and result `url`.
+Creation returns Agnes `video_id`. The CLI prints it as `task_id` alongside SQLite local `id` (1, 2, 3…). Polling always uses `/agnesapi?video_id=...&model_name=...` on the configured gateway, with the model saved at task creation, regardless of whether the ID starts with `task_` or `video_`. Completion uses top-level `status`, `progress`, and result `url`; the parser also accepts `video_url` and `metadata.url`.
 
 | Command | Purpose |
 |---------|---------|

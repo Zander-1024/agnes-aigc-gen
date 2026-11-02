@@ -8,9 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Accept gateway base URLs with or without `/v1` for text, image, and video requests; query all video tasks through `/agnesapi` on the configured gateway.
 - Query saved video IDs through the Agnes result endpoint regardless of their prefix, using the model recorded at creation.
 - Recover completed video URLs from legacy task responses containing `metadata.url`, alongside top-level `url` and `video_url`.
 - Include video response bodies in verbose diagnostics, with credential redaction and safe truncation of multilingual text.
+
+### Changed
+
+- Default `base_url` to `https://apihub.agnes-ai.com`; existing versioned gateway URLs remain compatible.
 
 ## [0.5.1] - 2026-11-02
 

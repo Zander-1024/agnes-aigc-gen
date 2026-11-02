@@ -7,7 +7,7 @@
 | 项目 | 值 |
 |------|-----|
 | 模型 ID | `agnes-3.0-flash` |
-| Base URL | `https://apihub.agnes-ai.com/v1` |
+| CLI `base_url` | `https://apihub.agnes-ai.com`（兼容末尾带 `/v1`） |
 | CLI chat 使用的接口 | `POST /v1/chat/completions` |
 | 上下文窗口 | 512K（524,288 Token） |
 | 最大输出 | 65,536 Token |

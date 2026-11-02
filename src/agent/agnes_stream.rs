@@ -112,7 +112,8 @@ pub async fn stream_agnes(
         .base_url
         .clone()
         .unwrap_or_else(|| model.base_url.clone());
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let url = crate::api::endpoints::v1_endpoint(&base_url, "chat/completions")
+        .map_err(|err| Error::Other(format!("invalid Agnes base URL: {err:#}")))?;
     let body = build_chat_body(model, context, options);
     let cancel = options.stream.cancel.clone();
     let headers = options.stream.headers.clone();
@@ -609,6 +610,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_uses_versioned_chat_endpoint_for_gateway_and_v1_bases() {
+        for suffix in ["", "/", "/v1", "/v1/"] {
+            for override_base in [false, true] {
+                let server = RetryServer::spawn(vec![200]);
+                let base_url = format!("{}{suffix}", server.base_url());
+                let model = Model::openai_compat("agnes", "agnes-3.0-flash", &base_url, 1, 1);
+                let options = AgnesStreamOptions {
+                    stream: StreamOptions {
+                        api_key: Some("test-key".into()),
+                        base_url: override_base.then_some(base_url),
+                        ..StreamOptions::default()
+                    },
+                    enable_thinking: false,
+                };
+                let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
+                let mut stream = stream_agnes(&model, &ctx, &options).await.unwrap();
+                while let Some(event) = stream.next().await {
+                    if matches!(event.unwrap(), AssistantMessageEvent::Done { .. }) {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    server.paths(),
+                    ["/v1/chat/completions"],
+                    "suffix={suffix}, override={override_base}"
+                );
+                assert_eq!(server.requests()[0]["messages"][0]["content"], "hello");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn stream_retries_retryable_statuses_before_success() {
         let server = RetryServer::spawn(vec![503, 503, 200]);
         let model = Model::openai_compat("agnes", "agnes-3.0-flash", server.base_url(), 1, 1);
@@ -659,7 +692,7 @@ mod tests {
         assert_eq!(server.attempts(), 3);
     }
 
-    fn read_request_body(stream: &mut std::net::TcpStream) -> Value {
+    fn read_request_body(stream: &mut std::net::TcpStream) -> (String, Value) {
         let mut request = Vec::new();
         let mut buf = [0; 2048];
         loop {
@@ -676,7 +709,18 @@ mod tests {
                     .unwrap();
                 let body_start = header_end + 4;
                 if request.len() >= body_start + length {
-                    return serde_json::from_slice(&request[body_start..body_start + length]).unwrap();
+                    let path = headers
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .to_string();
+                    return (
+                        path,
+                        serde_json::from_slice(&request[body_start..body_start + length]).unwrap(),
+                    );
                 }
             }
         }
@@ -686,6 +730,7 @@ mod tests {
         addr: std::net::SocketAddr,
         attempts: Arc<AtomicUsize>,
         requests: Arc<Mutex<Vec<Value>>>,
+        paths: Arc<Mutex<Vec<String>>>,
     }
 
     impl RetryServer {
@@ -696,12 +741,16 @@ mod tests {
             let attempts_for_thread = attempts.clone();
             let requests = Arc::new(Mutex::new(Vec::new()));
             let requests_for_thread = requests.clone();
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let paths_for_thread = paths.clone();
             thread::spawn(move || {
                 for status in statuses {
                     let (mut stream, _) = listener.accept().unwrap();
                     attempts_for_thread.fetch_add(1, Ordering::SeqCst);
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                    requests_for_thread.lock().unwrap().push(read_request_body(&mut stream));
+                    let (path, body) = read_request_body(&mut stream);
+                    paths_for_thread.lock().unwrap().push(path);
+                    requests_for_thread.lock().unwrap().push(body);
                     if status == 200 {
                         let body = concat!(
                             "data: {\"model\":\"agnes-3.0-flash\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
@@ -722,7 +771,7 @@ mod tests {
                     }
                 }
             });
-            Self { addr, attempts, requests }
+            Self { addr, attempts, requests, paths }
         }
 
         fn requests(&self) -> Vec<Value> {
@@ -731,6 +780,10 @@ mod tests {
 
         fn base_url(&self) -> String {
             format!("http://{}", self.addr)
+        }
+
+        fn paths(&self) -> Vec<String> {
+            self.paths.lock().unwrap().clone()
         }
 
         fn attempts(&self) -> usize {

@@ -224,11 +224,8 @@ fn decode_video_response(resp: reqwest::blocking::Response, context: &'static st
 
 fn get_video_query(api: &ApiClient, query_id: &str) -> Result<reqwest::blocking::Response> {
     let record = api.db.get_video_task(query_id).ok();
-    if let Some(url) = video_result_url(&api.config.base_url, &api.config.video_model, query_id, record.as_ref())? {
-        return api.get_json_url(&url);
-    }
-    let path = format!("videos/{query_id}");
-    api.get_json(&path)
+    let url = video_result_url(&api.config.base_url, &api.config.video_model, query_id, record.as_ref())?;
+    api.get_json_url(&url)
 }
 
 fn video_result_url(
@@ -236,36 +233,20 @@ fn video_result_url(
     default_model: &str,
     query_id: &str,
     record: Option<&VideoTaskRecord>,
-) -> Result<Option<String>> {
+) -> Result<String> {
     let video_id = record
         .and_then(|record| record.input_json.as_ref())
         .and_then(|input| input.get("video_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .or_else(|| is_video_id(query_id).then_some(query_id));
-    let Some(video_id) = video_id else {
-        return Ok(None);
-    };
+        .unwrap_or(query_id);
     let model = recorded_video_model(record).unwrap_or(default_model);
-    video_id_result_url(base_url, model, video_id).map(Some)
-}
-
-fn is_video_id(query_id: &str) -> bool {
-    query_id.trim_start().starts_with("video_")
+    video_id_result_url(base_url, model, video_id)
 }
 
 fn video_id_result_url(base_url: &str, video_model: &str, video_id: &str) -> Result<String> {
-    let mut url = Url::parse(base_url.trim()).context("parse base_url")?;
-    let path = url.path().trim_end_matches('/');
-    let root_path = path.strip_suffix("/v1").unwrap_or(path).trim_end_matches('/');
-    let agnesapi_path = if root_path.is_empty() {
-        "/agnesapi".to_string()
-    } else {
-        format!("{root_path}/agnesapi")
-    };
-    url.set_path(&agnesapi_path);
-    url.set_query(None);
+    let mut url = crate::api::endpoints::gateway_endpoint(base_url, "agnesapi")?;
     url.query_pairs_mut()
         .append_pair("video_id", video_id)
         .append_pair("model_name", video_model);
@@ -610,12 +591,29 @@ mod tests {
 
     #[test]
     fn video_id_result_url_uses_agnesapi_endpoint() {
-        let url =
-            video_id_result_url("https://apihub.agnes-ai.com/v1", "agnes-video-2.5-flash", "video_abc==").unwrap();
-        assert_eq!(
-            url,
-            "https://apihub.agnes-ai.com/agnesapi?video_id=video_abc%3D%3D&model_name=agnes-video-2.5-flash"
-        );
+        for base_url in [
+            "https://apihub.agnes-ai.com",
+            "https://apihub.agnes-ai.com/",
+            "https://apihub.agnes-ai.com/v1",
+            "https://apihub.agnes-ai.com/v1/",
+        ] {
+            let url = video_id_result_url(base_url, "agnes-video-2.5-flash", "video_abc==").unwrap();
+            assert_eq!(
+                url,
+                "https://apihub.agnes-ai.com/agnesapi?video_id=video_abc%3D%3D&model_name=agnes-video-2.5-flash"
+            );
+        }
+    }
+
+    #[test]
+    fn video_query_preserves_gateway_prefix_with_optional_v1() {
+        for base_url in ["https://example.com/proxy", "https://example.com/proxy/v1/"] {
+            let url = video_id_result_url(base_url, "agnes-video-2.5-flash", "task_fixture").unwrap();
+            assert_eq!(
+                url,
+                "https://example.com/proxy/agnesapi?video_id=task_fixture&model_name=agnes-video-2.5-flash"
+            );
+        }
     }
 
     #[test]
@@ -664,41 +662,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            url.as_deref(),
-            Some("https://example.com/agnesapi?video_id=task_result_fixture&model_name=agnes-video-2.5-flash")
+            url,
+            "https://example.com/agnesapi?video_id=task_result_fixture&model_name=agnes-video-2.5-flash"
         );
     }
 
     #[test]
-    fn unrecorded_query_routing_preserves_video_prefix_and_legacy_task_ids() {
-        assert!(
-            video_result_url("https://example.com/v1", "agnes-video-2.5", "task_fixture", None)
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            video_result_url("https://example.com/v1", "agnes-video-2.5", "video_fixture", None)
-                .unwrap()
-                .as_deref(),
-            Some("https://example.com/agnesapi?video_id=video_fixture&model_name=agnes-video-2.5")
-        );
+    fn unrecorded_query_ids_always_use_agnesapi_regardless_of_prefix() {
+        for query_id in ["task_fixture", "video_fixture", "opaque_fixture"] {
+            assert_eq!(
+                video_result_url("https://example.com/v1", "agnes-video-2.5", query_id, None).unwrap(),
+                format!("https://example.com/agnesapi?video_id={query_id}&model_name=agnes-video-2.5")
+            );
+        }
     }
 
     #[test]
-    fn blank_saved_video_id_preserves_legacy_task_route() {
+    fn blank_saved_video_id_uses_query_id_with_recorded_model() {
         let record = saved_task(json!({
             "model": "agnes-video-2.5-flash",
             "video_id": "  "
         }));
-        assert!(
+        assert_eq!(
             video_result_url(
                 "https://example.com/v1",
                 "agnes-video-2.5",
                 "task_fixture",
                 Some(&record)
             )
-            .unwrap()
-            .is_none()
+            .unwrap(),
+            "https://example.com/agnesapi?video_id=task_fixture&model_name=agnes-video-2.5-flash"
         );
     }
 

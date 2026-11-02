@@ -168,10 +168,12 @@ agnes-aigc-gen config show
 Optional settings:
 
 ```bash
-agnes-aigc-gen config set base-url https://apihub.agnes-ai.com/v1
+agnes-aigc-gen config set base-url https://apihub.agnes-ai.com
 agnes-aigc-gen config set output-dir .
 agnes-aigc-gen config set max-retries 3
 ```
+
+Set `base-url` to your API gateway, for example `https://apihub-test.agnes-dev.com`. Both gateway URLs and existing values ending in `/v1` work, including a trailing slash. The CLI adds exactly one `/v1` for chat, image generation, and video creation. Video queries use `/agnesapi?video_id=...&model_name=...` on the same configured gateway, with the model saved when the task was created. Existing configuration does not need to be rewritten.
 
 ---
 
@@ -190,7 +192,7 @@ Created/updated by `agnes-aigc-gen config set …`. Do not hand-edit `api_key_en
 ### Example (after `config set api-key`)
 
 ```toml
-base_url = "https://apihub.agnes-ai.com/v1"
+base_url = "https://apihub.agnes-ai.com"
 text_model = "agnes-3.0-flash"
 image_model = "agnes-image-2.5-flash"
 video_model = "agnes-video-2.5"
@@ -220,7 +222,7 @@ Text chat uses Agnes 3.0 Flash. Agnes 3.0 Pro is announced as coming soon and is
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `base_url` | `https://apihub.agnes-ai.com/v1` | API gateway |
+| `base_url` | `https://apihub.agnes-ai.com` | API gateway; optional trailing `/v1` is accepted |
 | `text_model` | `agnes-3.0-flash` | Chat model |
 | `thinking_text_model` | (none) | Optional thinking chat model; fallback to `text_model` |
 | `chat_thinking` | `true` | Default chat thinking mode |

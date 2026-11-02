@@ -7,7 +7,7 @@
 | 创建 | `POST https://apihub.agnes-ai.com/v1/videos` |
 | 查询 | `GET https://apihub.agnes-ai.com/agnesapi?video_id=<ID>&model_name=agnes-video-2.5` |
 
-请求使用 Bearer API Key。创建后保存 `video_id`，查询时同时传入创建任务所用的模型名称。`video_id` 也可能以 `task_` 开头，应使用返回的字段决定查询接口，不根据 ID 前缀判断。
+请求使用 Bearer API Key。CLI 的 `base_url` 默认为 `https://apihub.agnes-ai.com`，兼容末尾带 `/v1` 的配置；创建时自动使用 `/v1/videos`，查询统一使用同一网关的 `/agnesapi`。创建后保存 `video_id`，查询时同时传入创建任务所用的模型名称，适用于全部生成模式和 ID 前缀，包括以 `task_` 开头的 `video_id`。
 
 | 字段 | 用法 |
 |------|------|
@@ -43,7 +43,7 @@
 
 请求直接发送上述顶层字段。Python OpenAI SDK 的 `extra_body` 是合并到顶层的 SDK 选项，不能照搬为视频请求的嵌套对象。
 
-读取顶层 `status` 与 `progress`；`completed` 后从 `url` 取结果。CLI 还兼容顶层 `video_url`，以及旧查询接口 `GET {base_url}/videos/{id}` 返回的 `metadata.url`。`remixed_from_video_id` 表示来源视频 ID，不是结果链接；`internal_status` 不决定是否完成。失败时读取 `error`。排查响应结构可运行 `agnes-aigc-gen --verbose task show <任务 ID>`，只查询已有任务，不会重新提交；详细日志中的密钥、签名参数与图片数据会被隐藏。
+读取顶层 `status` 与 `progress`；`completed` 后从 `url` 取结果。CLI 还兼容响应中的顶层 `video_url` 和 `metadata.url`。`remixed_from_video_id` 表示来源视频 ID，不是结果链接；`internal_status` 不决定是否完成。失败时读取 `error`。排查响应结构可运行 `agnes-aigc-gen --verbose task show <任务 ID>`，只查询已有任务，不会重新提交；详细日志中的密钥、签名参数与图片数据会被隐藏。
 
 ```bash
 agnes-aigc-gen video -p "云海上缓慢前进的列车" -d 5 --size 1080P --async

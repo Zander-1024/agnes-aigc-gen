@@ -1,4 +1,5 @@
 mod deliver;
+pub(crate) mod endpoints;
 mod error;
 mod image;
 pub mod types;
@@ -63,11 +64,7 @@ impl ApiClient {
     }
 
     pub fn post_json(&self, path: &str, body: &impl serde::Serialize) -> Result<Response> {
-        let url = format!(
-            "{}/{}",
-            self.config.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
+        let url = endpoints::v1_endpoint(&self.config.base_url, path)?;
         let body_value = serde_json::to_value(body).ok();
         logging::log_request("POST", &url, body_value.as_ref());
         let resp = retry(self.config.max_retries, || {
@@ -79,15 +76,6 @@ impl ApiClient {
         })?;
         log::debug!("response status={}", resp.status());
         Ok(resp)
-    }
-
-    pub fn get_json(&self, path: &str) -> Result<Response> {
-        let url = format!(
-            "{}/{}",
-            self.config.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        self.get_json_url(&url)
     }
 
     pub fn get_json_url(&self, url: &str) -> Result<Response> {

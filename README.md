@@ -78,7 +78,7 @@ API key is encrypted in `{config_dir}/config.toml`. Full setup: [docs/SETUP.md](
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `base_url` | `https://apihub.agnes-ai.com/v1` | Official Agnes API gateway |
+| `base_url` | `https://apihub.agnes-ai.com` | API gateway; existing URLs ending in `/v1` are also accepted |
 | `text_model` | `agnes-3.0-flash` | Chat model |
 | `thinking_text_model` | unset | Optional thinking model; falls back to `text_model` |
 | `chat_thinking` | `true` | Default chat thinking mode |

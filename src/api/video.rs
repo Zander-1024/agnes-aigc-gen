@@ -127,7 +127,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
 
     let resp = api.post_json("videos", &body)?;
     let resp = ApiClient::ensure_success(resp, "video task creation")?;
-    let created: VideoTaskResponse = resp.json().context("parse video create response")?;
+    let created = decode_video_response(resp, "parse video create response")?;
     let query_ids = created.query_ids();
     let query_id = query_ids.first().cloned().context("missing video_id/task_id")?;
     record_video_query_ids(&mut input_record, &query_ids, &created);
@@ -212,18 +212,43 @@ fn record_video_query_ids(input_record: &mut Value, query_ids: &[String], create
 pub fn fetch_video_task_once(api: &ApiClient, query_id: &str) -> Result<VideoTaskResponse> {
     let resp = get_video_query(api, query_id)?;
     let resp = ApiClient::ensure_success(resp, "fetch video task")?;
-    resp.json().context("parse video task")
+    decode_video_response(resp, "parse video task")
+}
+
+fn decode_video_response(resp: reqwest::blocking::Response, context: &'static str) -> Result<VideoTaskResponse> {
+    let status = resp.status().as_u16();
+    let body = resp.text().context("read video response body")?;
+    crate::logging::log_response(status, &body);
+    serde_json::from_str(&body).context(context)
 }
 
 fn get_video_query(api: &ApiClient, query_id: &str) -> Result<reqwest::blocking::Response> {
-    if is_video_id(query_id) {
-        let record = api.db.get_video_task(query_id).ok();
-        let model = recorded_video_model(record.as_ref()).unwrap_or(&api.config.video_model);
-        let url = video_id_result_url(&api.config.base_url, model, query_id)?;
+    let record = api.db.get_video_task(query_id).ok();
+    if let Some(url) = video_result_url(&api.config.base_url, &api.config.video_model, query_id, record.as_ref())? {
         return api.get_json_url(&url);
     }
     let path = format!("videos/{query_id}");
     api.get_json(&path)
+}
+
+fn video_result_url(
+    base_url: &str,
+    default_model: &str,
+    query_id: &str,
+    record: Option<&VideoTaskRecord>,
+) -> Result<Option<String>> {
+    let video_id = record
+        .and_then(|record| record.input_json.as_ref())
+        .and_then(|input| input.get("video_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .or_else(|| is_video_id(query_id).then_some(query_id));
+    let Some(video_id) = video_id else {
+        return Ok(None);
+    };
+    let model = recorded_video_model(record).unwrap_or(default_model);
+    video_id_result_url(base_url, model, video_id).map(Some)
 }
 
 fn is_video_id(query_id: &str) -> bool {
@@ -331,7 +356,7 @@ pub fn poll_video_task(api: &ApiClient, query_id: &str) -> Result<VideoTaskRespo
             return error::http_failure(status, body, "poll video");
         }
         http_attempt = 0;
-        let task: VideoTaskResponse = resp.json().context("parse video task")?;
+        let task = decode_video_response(resp, "parse video task")?;
         let _ = persist_task_from_response(api, query_id, &task);
         match &task.status {
             VideoStatus::Completed => {
@@ -547,6 +572,9 @@ fn validate_video_media_url(resolved: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
     use super::*;
 
     fn request() -> VideoRequest {
@@ -607,6 +635,124 @@ mod tests {
         let url = video_id_result_url("https://example.com/v1", model, &record.task_id).unwrap();
         assert!(url.ends_with("model_name=agnes-video-2.5-flash"));
         assert!(recorded_video_model(None).is_none());
+    }
+
+    fn saved_task(input_json: Value) -> VideoTaskRecord {
+        serde_json::from_value(json!({
+            "id": 1,
+            "task_id": "task_fixture",
+            "status": "queued",
+            "phase": "processing",
+            "input_json": input_json,
+            "created_at": "2026-10-31",
+            "updated_at": "2026-10-31"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn recorded_task_prefixed_video_id_uses_canonical_endpoint_and_saved_model() {
+        let record = saved_task(json!({
+            "model": "agnes-video-2.5-flash",
+            "video_id": "task_result_fixture"
+        }));
+        let url = video_result_url(
+            "https://example.com/v1",
+            "agnes-video-v2.0",
+            "task_fixture",
+            Some(&record),
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_deref(),
+            Some("https://example.com/agnesapi?video_id=task_result_fixture&model_name=agnes-video-2.5-flash")
+        );
+    }
+
+    #[test]
+    fn unrecorded_query_routing_preserves_video_prefix_and_legacy_task_ids() {
+        assert!(
+            video_result_url("https://example.com/v1", "agnes-video-2.5", "task_fixture", None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            video_result_url("https://example.com/v1", "agnes-video-2.5", "video_fixture", None)
+                .unwrap()
+                .as_deref(),
+            Some("https://example.com/agnesapi?video_id=video_fixture&model_name=agnes-video-2.5")
+        );
+    }
+
+    #[test]
+    fn blank_saved_video_id_preserves_legacy_task_route() {
+        let record = saved_task(json!({
+            "model": "agnes-video-2.5-flash",
+            "video_id": "  "
+        }));
+        assert!(
+            video_result_url(
+                "https://example.com/v1",
+                "agnes-video-2.5",
+                "task_fixture",
+                Some(&record)
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    fn fake_video_response(body: &str) -> reqwest::blocking::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = body.to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0, "request ended before HTTP headers");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            assert!(request.starts_with(b"GET /fixture HTTP/1.1\r\n"));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let response = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/fixture"))
+            .send()
+            .unwrap();
+        server.join().unwrap();
+        response
+    }
+
+    #[test]
+    fn video_response_decoder_accepts_completed_legacy_metadata_result() {
+        let response = fake_video_response(
+            r#"{"id":"task_fixture","status":"completed","progress":100,"metadata":{"url":"https://example.com/result.mp4","description":"海浪"}}"#,
+        );
+        let task = decode_video_response(response, "parse video task").unwrap();
+        assert_eq!(task.status, VideoStatus::Completed);
+        assert_eq!(task.progress, Some(100));
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/result.mp4"));
+    }
+
+    #[test]
+    fn video_response_decoder_preserves_parse_error_context() {
+        let response = fake_video_response("{invalid");
+        let error = decode_video_response(response, "parse video task").unwrap_err();
+        assert_eq!(error.to_string(), "parse video task");
     }
 
     #[test]

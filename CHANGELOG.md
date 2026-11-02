@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Query saved video IDs through the Agnes result endpoint regardless of their prefix, using the model recorded at creation.
+- Recover completed video URLs from legacy task responses containing `metadata.url`, alongside top-level `url` and `video_url`.
+- Include video response bodies in verbose diagnostics, with credential redaction and safe truncation of multilingual text.
+
 ## [0.5.1] - 2026-11-02
 
 ### Fixed

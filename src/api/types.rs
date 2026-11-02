@@ -129,8 +129,9 @@ pub struct VideoTaskResponse {
     pub status: VideoStatus,
     #[serde(default)]
     pub progress: Option<i32>,
-    #[serde(alias = "video_url")]
     pub url: Option<String>,
+    pub video_url: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub error: Option<serde_json::Value>,
 }
 
@@ -144,7 +145,17 @@ impl VideoTaskResponse {
     }
 
     pub fn result_url(&self) -> Option<String> {
-        self.url.clone()
+        let metadata_url = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("url"))
+            .and_then(serde_json::Value::as_str);
+        [self.url.as_deref(), self.video_url.as_deref(), metadata_url]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|url| !url.is_empty())
+            .map(str::to_string)
     }
 }
 
@@ -214,6 +225,54 @@ mod tests {
         value.as_object_mut().unwrap().remove("url");
         let task: VideoTaskResponse = serde_json::from_value(value).unwrap();
         assert!(task.result_url().is_none());
+    }
+
+    #[test]
+    fn completed_video_accepts_metadata_url_from_task_query() {
+        let task: VideoTaskResponse = serde_json::from_value(serde_json::json!({
+            "id": "task_example",
+            "video_id": "task_example",
+            "object": "video",
+            "status": "completed",
+            "progress": 100,
+            "metadata": {"url": "https://example.com/result.mp4"}
+        }))
+        .unwrap();
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/result.mp4"));
+    }
+
+    #[test]
+    fn completed_video_accepts_both_top_level_url_fields() {
+        let task: VideoTaskResponse = serde_json::from_value(serde_json::json!({
+            "status": "completed",
+            "url": "https://example.com/preferred.mp4",
+            "video_url": "https://example.com/alternate.mp4",
+            "metadata": {"url": "https://example.com/metadata.mp4"}
+        }))
+        .unwrap();
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/preferred.mp4"));
+    }
+
+    #[test]
+    fn completed_video_skips_empty_url_fields_and_trims_result() {
+        let mut value = serde_json::json!({
+            "status": "completed",
+            "url": "  ",
+            "video_url": "\n\t",
+            "metadata": {"url": "  https://example.com/result.mp4 \n"},
+            "remixed_from_video_id": "https://example.com/source.mp4"
+        });
+        let task: VideoTaskResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/result.mp4"));
+        value["video_url"] = serde_json::json!(" https://example.com/video.mp4 ");
+        let task: VideoTaskResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(task.result_url().as_deref(), Some("https://example.com/video.mp4"));
+        value["video_url"] = serde_json::json!(null);
+        for metadata in [serde_json::json!({"url": " \n"}), serde_json::json!({"url": 42}), serde_json::json!({})] {
+            value["metadata"] = metadata;
+            let task: VideoTaskResponse = serde_json::from_value(value.clone()).unwrap();
+            assert!(task.result_url().is_none());
+        }
     }
 
     #[test]

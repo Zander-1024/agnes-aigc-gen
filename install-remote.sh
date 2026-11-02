@@ -27,9 +27,30 @@ resolve_version() {
     echo "$v"
     return
   fi
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' \
-    | head -1
+  local tag final_url release_prefix
+  if tag="$(curl -fsSL --connect-timeout 10 --max-time 20 \
+    "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -1)" && [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "${tag#v}"
+    return
+  fi
+  release_prefix="https://github.com/${REPO}/releases/tag/"
+  if final_url="$(curl -fsSIL --connect-timeout 10 --max-time 20 \
+    --proto '=https' --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest" 2>/dev/null)"; then
+    case "$final_url" in
+      "$release_prefix"*)
+        tag="${final_url#"$release_prefix"}"
+        if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "${tag#v}"
+          return
+        fi
+        ;;
+    esac
+  fi
+  echo "Unable to resolve the latest GitHub release. Retry later or set AGNES_AIGC_VERSION to a known release version." >&2
+  return 1
 }
 
 install_skill() {

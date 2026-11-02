@@ -12,8 +12,35 @@ function Get-ReleaseVersion {
     if ($env:AGNES_AIGC_VERSION) {
         return ($env:AGNES_AIGC_VERSION -replace '^v', '')
     }
-    $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-    return ($latest.tag_name -replace '^v', '')
+    try {
+        $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 20
+        $tag = [string]$latest.tag_name
+        if ($tag -match '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            return $tag.Substring(1)
+        }
+    } catch {
+        # Public API requests may be rate limited; the release page is independent.
+    }
+    try {
+        $response = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -Method Head -MaximumRedirection 10 -TimeoutSec 20 -UseBasicParsing
+        $baseResponse = $response.BaseResponse
+        $finalUri = $null
+        if ($baseResponse.PSObject.Properties['ResponseUri']) {
+            $finalUri = $baseResponse.ResponseUri
+        } elseif ($baseResponse.PSObject.Properties['RequestMessage']) {
+            $finalUri = $baseResponse.RequestMessage.RequestUri
+        }
+        $releasePrefix = "https://github.com/$Repo/releases/tag/"
+        if ($finalUri -and $finalUri.AbsoluteUri.StartsWith($releasePrefix, [System.StringComparison]::Ordinal)) {
+            $tag = $finalUri.AbsoluteUri.Substring($releasePrefix.Length)
+            if ($tag -match '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+                return $tag.Substring(1)
+            }
+        }
+    } catch {
+        # A pinned version still allows installation when both lookup paths fail.
+    }
+    throw 'Unable to resolve the latest GitHub release. Retry later or set $env:AGNES_AIGC_VERSION to a known release version.'
 }
 
 $Version = Get-ReleaseVersion

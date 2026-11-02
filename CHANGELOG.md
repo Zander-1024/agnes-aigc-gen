@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fall back to the official GitHub latest-release page when REST API version lookup fails, including rate-limit responses.
+- Correct the version-pinned install example so the version reaches the installer process.
+
 ## [0.5.0] - 2026-10-31
 
 ### Added

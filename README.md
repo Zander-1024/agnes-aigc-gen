@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-
 
 **Windows (cmd):** run `install-remote.bat` from a clone, or use the PowerShell one-liner above.
 
-Pin version: `AGNES_AIGC_VERSION=0.4.0` before the curl/irm command.
+Pin a version by setting `AGNES_AIGC_VERSION` on the installer process; see [pinned installation](docs/SETUP.md#option-a--release-install-recommended). For GitHub API `403 rate limit exceeded` errors, use the [version-pinned workaround](docs/SETUP.md#github-api-rate-limits).
 
 ### Source install (developers)
 

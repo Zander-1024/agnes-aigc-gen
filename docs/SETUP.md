@@ -22,7 +22,8 @@ curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/i
 **Pin a version:**
 
 ```bash
-AGNES_AIGC_VERSION=0.4.0 curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.5.0/install-remote.sh -o /tmp/agnes-install.sh
+AGNES_AIGC_VERSION=0.5.0 bash /tmp/agnes-install.sh
 ```
 
 **Windows (PowerShell):**
@@ -301,6 +302,19 @@ Interactive `self update` offers:
 
 `self uninstall` asks separately whether to remove the binary, skill directories, and local config/database.
 
+### GitHub API rate limits
+
+A `403 rate limit exceeded` response from `api.github.com/.../releases/latest` means the GitHub version lookup was rate-limited. Current source falls back to the official GitHub `releases/latest` page when the API lookup fails; older installed binaries can still report this error.
+
+To install the published v0.5.0 without querying the API, pin the version on the process that runs the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.5.0/install-remote.sh -o /tmp/agnes-install.sh
+AGNES_AIGC_VERSION=0.5.0 bash /tmp/agnes-install.sh
+```
+
+This installs the binary and the default agent skill. Set the documented `INSTALL_AGENTS` or `INSTALL_SKILL_DIR` options if you also use other skill locations. Existing API configuration and generation history are preserved. Setting `AGNES_AIGC_VERSION` only on `curl` does not pass it to a piped `bash` process.
+
 ---
 
 ## 7. Release & tags (maintainers)
@@ -323,6 +337,7 @@ Tag version must match `Cargo.toml` `version`.
 | `API key not configured` | `config set api-key …` |
 | Decrypt / machine error | Re-set API key on this machine |
 | Release install fails | Ensure a GitHub Release exists for the requested version |
+| GitHub API `403 rate limit exceeded` | Use the [version-pinned installer](#github-api-rate-limits) |
 | Skill not loaded | Install to `~/.agents/skills/agnes-aigc-gen/` or set `INSTALL_AGENTS=cursor,claude,...` |
 
 Command-level errors: see **Common errors** in [SKILL.md](./SKILL.md).

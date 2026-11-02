@@ -1,8 +1,10 @@
 pub mod input;
 pub mod jpeg;
+mod video_image;
 
 pub use input::{classify_input, parse_image_inputs, resolve_for_api};
 pub use jpeg::ensure_jpeg_bytes;
+pub use video_image::resolve_video_image_input;
 
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};

@@ -4,7 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::fields::{InputList, TextArea, form_field_line};
+use super::fields::{InputList, TextArea, form_field_line, image_input_is_inline, image_input_label};
 use crate::ui::dashboard::task_display::TaskStripData;
 
 pub fn render_text_box(frame: &mut Frame, area: Rect, title: &str, focused: bool, editing: bool, text: &TextArea) {
@@ -58,14 +58,23 @@ pub fn render_media_panel(
         Style::default().fg(Color::DarkGray),
     )));
     if adding {
-        lines.push(Line::from(format!("+ {}", inputs.add_buffer.display_with_cursor(true))));
+        let label = if image_input_is_inline(&inputs.add_buffer.value) {
+            image_input_label(&inputs.add_buffer.value)
+        } else {
+            inputs.add_buffer.display_with_cursor(true)
+        };
+        lines.push(Line::from(format!("+ {label}")));
     } else if inputs.items.is_empty() {
         lines.push(Line::from("(none)"));
     } else {
         for (i, item) in inputs.items.iter().enumerate() {
             let mark = if i == inputs.selected { ">" } else { " " };
             let valid = if item.valid { "✓" } else { "✗" };
-            lines.push(Line::from(format!("{mark} [{valid}] {} {}", item.kind_label, item.raw)));
+            lines.push(Line::from(format!(
+                "{mark} [{valid}] {} {}",
+                item.kind_label,
+                image_input_label(&item.raw)
+            )));
         }
     }
     let block = Block::default()
@@ -116,4 +125,30 @@ pub fn param_line(label: &str, field_focus: bool, section_focus: bool, value: &s
 
 pub fn error_line(msg: &str) -> Line<'static> {
     Line::from(Span::styled(format!("Error: {msg}"), Style::default().fg(Color::Red)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_panel_hides_inline_payload_while_adding_and_after_added() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let raw = "data:image/jpeg;base64,SECRET_INLINE_IMAGE_BYTES";
+        let mut inputs = InputList::new();
+        inputs.push_raw(raw.into(), false);
+        inputs.add_buffer = super::super::fields::TextInput::new(raw);
+        for adding in [false, true] {
+            let mut terminal = Terminal::new(TestBackend::new(70, 8)).unwrap();
+            terminal
+                .draw(|frame| render_media_panel(frame, frame.area(), true, &inputs, adding, "image references"))
+                .unwrap();
+            let buffer = format!("{:?}", terminal.backend().buffer());
+            assert!(buffer.contains("inline image"));
+            assert!(!buffer.contains("SECRET_INLINE_IMAGE_BYTES"));
+            assert!(!buffer.contains("data:image"));
+        }
+    }
 }

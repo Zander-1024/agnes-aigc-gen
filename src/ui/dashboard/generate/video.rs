@@ -337,9 +337,17 @@ impl VideoForm {
             self.section = VideoSection::Text;
             return Err(self.field_error.clone().unwrap());
         }
-        for item in &self.inputs.items {
-            if !item.valid {
-                self.field_error = Some(format!("invalid video input: {} (HTTPS or asset:// only)", item.raw));
+        for (index, item) in self.inputs.items.iter().enumerate() {
+            let valid = if let Some(id) = item.raw.strip_prefix("asset://") {
+                !id.trim().is_empty()
+            } else {
+                crate::media::resolve_video_image_input(&item.raw).is_ok()
+            };
+            if !valid {
+                self.field_error = Some(format!(
+                    "invalid video image {}: use an HTTPS URL, asset://, local image, Base64, or Data URI",
+                    index + 1
+                ));
                 self.section = VideoSection::Media;
                 return Err(self.field_error.clone().unwrap());
             }
@@ -555,5 +563,25 @@ mod tests {
     #[test]
     fn async_mode_defaults_on() {
         assert!(VideoForm::new().async_mode);
+    }
+
+    #[test]
+    fn video_form_revalidates_inline_images_without_dumping_payloads() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut form = VideoForm::new();
+        form.prompt.push_char('x');
+        form.inputs
+            .push_raw(format!("data:image/png;base64,{}", B64.encode(png)), true);
+        assert!(form.validate().is_ok());
+
+        form.inputs.items[0].raw = "data:image/jpeg;base64,SECRET_INVALID_BYTES".into();
+        let error = form.validate().unwrap_err();
+        assert!(error.contains("invalid video image 1"));
+        assert!(!error.contains("SECRET_INVALID_BYTES"));
+        assert!(!error.contains("data:image"));
     }
 }

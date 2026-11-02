@@ -21,8 +21,8 @@ CLI for [Agnes AI](https://agnes-ai.com) text chat, image understanding, and ima
 | **Image ratios** | `1:1`, `3:4`, `4:3`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9` |
 | **Image size** | `--size` `1K` / `2K` / `3K` / `4K` (default `1K`; max `4K`; case-insensitive on CLI) |
 | **Image inputs** | Local path, HTTPS URL, `asset://`, base64, **data URI** (i2i) |
-| **Video inputs** | **HTTPS URL or `asset://` only** — no local path, base64, or data URI |
-| **Video media** | `-i` / `--image`, `--first-frame`, `--last-frame`, `--audio`, `--video`; public HTTPS URLs or image `asset://` |
+| **Video image inputs** | `-i` / `--image`, `--first-frame`, `--last-frame`: HTTPS URL, `asset://`, local PNG/JPEG/WebP, Base64, or image Data URI |
+| **Video audio/video inputs** | `--audio`, `--video`: public HTTPS URLs or `asset://` resolving to HTTPS |
 | **Batch `-n`** | Image only, **1–4**, concurrent; **mutually exclusive with `--seed`** |
 | **Image seed** | `-s` / `--seed`, **0–999** or omit (random per call) |
 | **Video seed** | `-s` / `--seed`, unsigned integer or omit (not sent to API) |
@@ -121,12 +121,12 @@ Example user message:
 
 | Form | Image i2i | Video `-i` |
 |------|-----------|------------|
-| Local path | ✓ | ✗ |
+| Local path | ✓ | ✓ |
 | `https://…` | ✓ | ✓ |
 | `asset://<id>` | ✓ (→ remote URL) | ✓ (→ remote URL) |
-| base64 / data URI | ✓ | ✗ |
+| base64 / data URI | ✓ | ✓ |
 
-**Video:** the API accepts **HTTP(S) image URLs only**. Do not pass local files or inline base64. Run `image` first, then chain with `asset://<id>` from JSON output (or use a public HTTPS URL).
+**Video images:** the same forms apply to `--first-frame` and `--last-frame`. Local PNG/JPEG/WebP, bare Base64, `base64:...`, and image Data URIs are validated and normalized to `data:image/jpeg;base64,...`; remote HTTPS URLs and resolved asset URLs pass through. JPEG conversion keeps dimensions and the source file, but drops transparency. Audio/video references remain HTTPS-only after asset resolution. Server Data URI behavior was verified on the test gateway; the official API reference still documents public URLs (see the video model reference for the tested scope).
 
 **Image i2i:** data URIs (`data:image/jpeg;base64,…`) and local files are supported; PNG/local bytes are converted to JPEG data URI before upload.
 
@@ -150,7 +150,7 @@ Default `base_url`: `https://apihub.agnes-ai.com`. Existing values ending in `/v
 
 1. API key configured (`config show`)
 2. Image: local `-i` paths exist if used
-3. Video: every `-i` resolves to an HTTPS URL (`asset://` or direct URL)
+3. Video images: local files must exist and inline data must decode to PNG/JPEG/WebP; audio/video references must resolve to HTTPS URLs
 4. `asset://` ids from prior runs on **this** machine
 5. Video: allow minutes for poll; use `--verbose` to monitor
 
@@ -223,6 +223,9 @@ Single image: top-level object (no `results` wrapper).
 agnes-aigc-gen video -p "Ocean sunset" --ratio 16:9 -d 5 --size 1080P
 agnes-aigc-gen video --model agnes-video-2.5-flash -p "Gentle motion" -i asset://c8d4eb63a84b -d 5
 agnes-aigc-gen video -p "Smooth transition" --first-frame https://example.com/start.png --last-frame https://example.com/end.png
+agnes-aigc-gen video -p "Smooth transition" --first-frame ./start.png --last-frame ./end.webp
+agnes-aigc-gen video -p "Use <Picture 1> and <Picture 2>" --mode reference -i ./person.png -i ./scene.jpg
+agnes-aigc-gen video -p "Gentle motion" --first-frame "data:image/png;base64,BASE64_HERE"
 agnes-aigc-gen video -p "Use <Picture 1> and follow <Audio 1>" --mode reference -i https://example.com/person.png --audio https://example.com/beat.mp3
 agnes-aigc-gen video -p "Follow <Video 1>" --video '{"url":"https://example.com/motion.mp4","start_seconds":2,"require_audio":false}'
 agnes-aigc-gen video -p "Ocean sunset" --async
@@ -241,7 +244,7 @@ agnes-aigc-gen task wait 3
 | Multiple `-i`, or audio/video media | `reference`; `images`, `audios`, `videos` |
 | `--mode reference -i URL` | Single-image reference instead of first frame |
 
-`text` takes no media. `keyframe` uses first/last frames, and `reference` uses media arrays; keep these fields within their mode. All media must resolve to publicly accessible HTTPS URLs. Images can use local `asset://` records that resolve to a remote URL. Output ratio is selected by `--ratio`; reference images may have different ratios.
+`text` takes no media. `keyframe` uses first/last frames, and `reference` uses media arrays; keep these fields within their mode. Image inputs use the forms listed above; audio/video inputs must resolve to publicly accessible HTTPS URLs. Two `-i` arguments mean two references, not a first/last pair. Output ratio is selected by `--ratio`; reference images may have different ratios.
 
 | Limit | Video 2.5 | Video 2.5 Flash |
 |-------|-----------|-----------------|
@@ -264,8 +267,8 @@ Video ratios: `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`. `1K` is fixed `1024x1
 | `-s` / `--seed` | omit | Unsigned integer; top-level API field |
 | `-r` / `--ratio` | `16:9` | Output aspect ratio |
 | `-d` / `--duration` | `5` | Integer 4–12 seconds |
-| `-i` / `--image` | — | Repeatable/comma-separated HTTPS URLs or `asset://` |
-| `--first-frame`, `--last-frame` | — | HTTPS URL or `asset://` |
+| `-i` / `--image` | — | Repeatable/comma-separated image inputs: local file, HTTPS URL, `asset://`, Base64, Data URI |
+| `--first-frame`, `--last-frame` | — | One image input per flag; same supported forms as `-i` |
 | `--audio` | — | Repeatable HTTPS audio URL |
 | `--video` | — | Repeatable HTTPS URL or JSON object with `url`, optional `start_seconds`, `require_audio` |
 | `--async` | off | Submit without polling |
@@ -296,7 +299,7 @@ agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
 agnes-aigc-gen --verbose video -p "Subtle motion" --ratio 9:16 -d 5 -i asset://<id>
 ```
 
-Use **`asset_uri`** (remote URL in DB), not a local path from `--save`. Select the output ratio and a 4–12 second duration.
+Use **`asset_uri`** to reuse a remote URL recorded in the DB, or pass a saved local image directly. Select the output ratio and a 4–12 second duration.
 
 ---
 
@@ -397,7 +400,7 @@ Existing saved configs keep their model names. For an upgrade, follow **Upgradin
 | Invalid video duration/size/mode | Use integer 4–12s, the model’s supported size, and matching media fields |
 | `--prompt is required` | Add `-p` |
 | `asset not found` | Regenerate image; `asset list` |
-| Video: `unsupported input` / local path | Use `asset://` or HTTPS URL only |
+| Video: invalid image input | Use a valid PNG/JPEG/WebP local file or Base64/Data URI, HTTPS URL, or existing `asset://` |
 | Hung video | Wait; `--verbose` or `--task-id` |
 
 ---

@@ -31,7 +31,8 @@ You can read, edit, search, run commands, manage todos, load skills, and call Ag
 Important Agnes media rules:
 - Use agnes_generate_image for image generation or image editing.
 - Use agnes_submit_video for video generation. It submits asynchronously and returns a local task id; do not block the main conversation waiting for video completion unless the user asks.
-- Video image inputs must be HTTPS URLs or asset:// references. Do not pass local paths, base64, or data URIs to video tools.
+- Video first/last frames and reference images accept HTTPS URLs, asset://, local paths, Base64, and Data URIs. Inline and local images are validated and sent as JPEG Data URIs.
+- Video audio and video references require HTTPS URLs or asset:// references.
 - Image inputs may be local path, HTTPS URL, asset://, base64, or data URI.
 - Prefer asset:// references when chaining image outputs into video.
 

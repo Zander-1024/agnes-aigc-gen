@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Video first/last frames and reference images accept local PNG/JPEG/WebP, Base64, and Data URIs, validated and normalized to JPEG Data URIs; audio/video references remain URL-only.
+
 ### Fixed
 
 - Accept gateway base URLs with or without `/v1` for text, image, and video requests; query all video tasks through `/agnesapi` on the configured gateway.

@@ -50,7 +50,7 @@ Pushing a new `v*` tag triggers [`.github/workflows/release.yml`](.github/workfl
 ## Project conventions
 
 - **Scope:** minimal diffs; match existing Rust/CLI patterns.
-- **Video `-i`:** HTTPS URL or `asset://` only (no local paths for video).
+- **Video images:** `-i`, `--first-frame`, and `--last-frame` accept HTTPS URL, `asset://`, local PNG/JPEG/WebP, Base64, or image Data URI. Validate local/inline images and normalize them to JPEG Data URI; preserve remote URLs. Audio/video references remain HTTPS-only after asset resolution.
 - **Image `-i`:** local path, URL, `asset://`, base64, data URI.
 - **Async video:** `video --async` → local SQLite `id` + vendor `task_id`; `task list` / `task show <id>` / `task wait <id>`.
 - **Docs:** user-facing CLI usage in [`skills/agnes-aigc-gen/SKILL.md`](skills/agnes-aigc-gen/SKILL.md); install/config in [`docs/SETUP.md`](docs/SETUP.md).

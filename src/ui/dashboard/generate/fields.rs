@@ -260,7 +260,7 @@ pub struct InputListItem {
 }
 
 impl InputListItem {
-    pub fn from_raw(raw: String, video_only_url: bool) -> Self {
+    pub fn from_raw(raw: String, video_image: bool) -> Self {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Self { raw, valid: false, kind_label: "empty".into() };
@@ -269,17 +269,15 @@ impl InputListItem {
             return Self { raw: trimmed.to_string(), valid: true, kind_label: "asset".into() };
         }
         let classified = classify_input(trimmed);
-        let (valid, kind_label) = match classified {
-            ImageInput::Url(_) if video_only_url => (true, "url".into()),
-            ImageInput::Url(_) => (true, "url".into()),
-            ImageInput::LocalPath(_) if video_only_url => (false, "local".into()),
-            ImageInput::LocalPath(_) => (true, "local".into()),
-            ImageInput::Base64(_) if video_only_url => (false, "b64".into()),
-            ImageInput::Base64(_) => (true, "b64".into()),
-            ImageInput::DataUri(_) if video_only_url => (false, "data".into()),
-            ImageInput::DataUri(_) => (true, "data".into()),
+        let kind_label = match classified {
+            ImageInput::Url(_) => "url",
+            ImageInput::LocalPath(_) if image_input_is_inline(trimmed) => "b64",
+            ImageInput::LocalPath(_) => "local",
+            ImageInput::Base64(_) => "b64",
+            ImageInput::DataUri(_) => "data",
         };
-        Self { raw: trimmed.to_string(), valid, kind_label }
+        let valid = !video_image || crate::media::resolve_video_image_input(trimmed).is_ok();
+        Self { raw: trimmed.to_string(), valid, kind_label: kind_label.into() }
     }
 }
 
@@ -300,8 +298,8 @@ impl InputList {
         self.items.iter().map(|i| i.raw.clone()).collect()
     }
 
-    pub fn push_raw(&mut self, raw: String, video_only_url: bool) {
-        self.items.push(InputListItem::from_raw(raw, video_only_url));
+    pub fn push_raw(&mut self, raw: String, video_image: bool) {
+        self.items.push(InputListItem::from_raw(raw, video_image));
         self.selected = self.items.len().saturating_sub(1);
     }
 
@@ -313,6 +311,34 @@ impl InputList {
         if self.selected >= self.items.len() && !self.items.is_empty() {
             self.selected = self.items.len() - 1;
         }
+    }
+}
+
+pub fn image_input_is_inline(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.starts_with("data:") || raw.starts_with("base64:") {
+        return true;
+    }
+    if std::path::Path::new(raw).is_file() {
+        return false;
+    }
+    let compact: String = raw.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    compact.len() >= 32
+        && compact
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+}
+
+pub fn image_input_label(raw: &str) -> String {
+    if image_input_is_inline(raw) {
+        return format!("[inline image, {} bytes]", raw.len());
+    }
+    let mut chars = raw.chars();
+    let label: String = chars.by_ref().take(120).collect();
+    if chars.next().is_some() {
+        format!("{label}…")
+    } else {
+        label
     }
 }
 
@@ -372,11 +398,49 @@ mod tests {
     }
 
     #[test]
-    fn video_input_rejects_local_path() {
+    fn video_image_input_rejects_missing_file() {
         let item = InputListItem::from_raw("/tmp/a.png".into(), true);
         assert!(!item.valid);
         let item = InputListItem::from_raw("https://example.com/a.png".into(), true);
         assert!(item.valid);
+    }
+
+    #[test]
+    fn video_image_inputs_validate_inline_bytes_and_local_files() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let uri = format!("data:image/png;base64,{}", B64.encode(&png));
+        let item = InputListItem::from_raw(uri.clone(), true);
+        assert!(item.valid);
+        assert_eq!(item.raw, uri);
+        assert!(!InputListItem::from_raw("data:image/jpeg;base64,bm90IGFuIGltYWdl".into(), true).valid);
+        assert!(!InputListItem::from_raw("http://example.com/a.png".into(), true).valid);
+
+        let path = std::env::temp_dir().join(format!("agnes-dashboard-video-{}.png", rand::random::<u64>()));
+        std::fs::write(&path, png).unwrap();
+        let item = InputListItem::from_raw(path.display().to_string(), true);
+        std::fs::remove_file(path).unwrap();
+        assert!(item.valid);
+    }
+
+    #[test]
+    fn inline_labels_hide_payloads_and_bound_unicode_text() {
+        for raw in [
+            "data:image/png;base64,SECRET_IMAGE_PAYLOAD".to_string(),
+            "base64:SECRET_IMAGE_PAYLOAD".to_string(),
+            "QUFBQUFBQUFBQUFBQUFB\nQUFBQUFBQUFBQUFBQUFB".to_string(),
+        ] {
+            let label = image_input_label(&raw);
+            assert!(label.starts_with("[inline image,"));
+            assert!(!label.contains("SECRET_IMAGE_PAYLOAD"));
+            assert!(!label.contains("QUFB"));
+        }
+        let label = image_input_label(&"图片".repeat(100));
+        assert_eq!(label.chars().count(), 121);
+        assert!(label.ends_with('…'));
     }
 
     #[test]

@@ -119,7 +119,7 @@ impl AgentTool for AgnesSubmitVideoTool {
     }
 
     fn description(&self) -> &str {
-        "Submit an Agnes Video task asynchronously. Video image inputs must be HTTPS URLs or asset:// references."
+        "Submit an Agnes Video task asynchronously. Image inputs accept HTTPS URLs, asset://, local paths, Base64, and Data URIs. Audio and video references require HTTPS URLs or asset://."
     }
 
     fn parameters(&self) -> Value {
@@ -132,19 +132,19 @@ impl AgentTool for AgnesSubmitVideoTool {
                 "model": {"type": "string", "enum": ["agnes-video-2.5", "agnes-video-2.5-flash"]},
                 "mode": {"type": "string", "enum": ["text", "keyframe", "reference"]},
                 "size": {"type": "string", "enum": ["720P", "1080P", "1K", "2K"], "default": "720P"},
-                "first_frame": {"type": "string"},
-                "last_frame": {"type": "string"},
-                "audios": {"type": "array", "items": {"type": "string"}, "default": []},
+                "first_frame": {"type": "string", "description": "First-frame image: HTTPS URL, asset://, local path, Base64, or Data URI."},
+                "last_frame": {"type": "string", "description": "Last-frame image: HTTPS URL, asset://, local path, Base64, or Data URI."},
+                "audios": {"type": "array", "items": {"type": "string", "description": "HTTPS URL or asset:// reference."}, "default": []},
                 "videos": {"type": "array", "items": {
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string"},
+                        "url": {"type": "string", "description": "HTTPS URL or asset:// reference."},
                         "start_seconds": {"type": "number", "minimum": 0},
                         "require_audio": {"type": "boolean", "default": false}
                     },
                     "required": ["url"]
                 }, "default": []},
-                "images": {"type": "array", "items": {"type": "string"}, "default": []},
+                "images": {"type": "array", "items": {"type": "string", "description": "Image: HTTPS URL, asset://, local path, Base64, or Data URI."}, "default": []},
                 "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295u64}
             },
             "required": ["prompt"]

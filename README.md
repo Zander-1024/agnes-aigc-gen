@@ -106,9 +106,11 @@ agnes-aigc-gen video -p "Cinematic walk" --ratio 16:9 -d 5 --size 1080P
 # Flash (720P only)
 agnes-aigc-gen video --model agnes-video-2.5-flash -p "Ocean waves" -d 5
 
-# Image → video: generate first, then pass asset:// (HTTPS URL only for -i)
+# Image → video: chain an asset, or pass a local image/Base64/Data URI
 agnes-aigc-gen image -p "Portrait, soft light" --ratio 9:16
 agnes-aigc-gen video -p "Subtle motion" -d 5 -i asset://<id-from-json>
+agnes-aigc-gen video -p "Smooth transition" --first-frame ./start.png --last-frame ./end.jpg
+agnes-aigc-gen video -p "Use <Picture 1> and <Picture 2>" --mode reference -i ./person.png -i ./scene.webp
 
 # Version and update
 agnes-aigc-gen -v
@@ -142,12 +144,14 @@ agnes-aigc-gen chat --auto
 
 | Input | Image `-i` / `--input` | Video `-i` / `--image` |
 |-------|------------------------|-------------------------|
-| Local path | ✓ | ✗ |
+| Local path | ✓ | ✓ |
 | HTTPS URL | ✓ | ✓ |
 | `asset://` | ✓ | ✓ |
-| base64 / data URI | ✓ | ✗ |
+| base64 / data URI | ✓ | ✓ |
 
-Video does not upload local files or call the image API to stage frames. Generate an image first and chain with `asset_uri` from JSON output.
+Video image inputs (`-i`, `--first-frame`, `--last-frame`) accept local PNG/JPEG/WebP, bare Base64, `base64:...`, and `data:image/...;base64,...`, alongside HTTPS URLs and `asset://`. Local and inline images are validated and sent as JPEG Data URIs; HTTPS URLs and resolved asset URLs are preserved. Conversion keeps dimensions and the original file, but JPEG drops transparency. Audio/video references continue to require HTTPS URLs. Single `-i` means first frame; multiple `-i` means reference images, so use explicit frame flags for a first/last pair.
+
+JPEG Data URI requests were verified on the test gateway for both video models in keyframe and reference modes on 2026-11-02; see the [tested scope](docs/models/agnes-video-2.5.md). The official API documentation still describes public media URLs.
 
 ### Key limits
 

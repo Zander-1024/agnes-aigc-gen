@@ -37,15 +37,15 @@ pub struct VideoArgs {
     #[arg(short = 'd', long = "duration", default_value_t = 5.0)]
     pub duration: f64,
 
-    /// Input image URL(s): HTTPS URL or asset:// only (repeatable or comma-separated)
+    /// Input images: HTTPS URL, asset://, local path, Base64, or Data URI (repeatable or comma-separated)
     #[arg(short = 'i', long = "image")]
     pub images: Vec<String>,
 
-    /// First frame image: HTTPS URL or asset://
+    /// First frame image: HTTPS URL, asset://, local path, Base64, or Data URI
     #[arg(long)]
     pub first_frame: Option<String>,
 
-    /// Last frame image: HTTPS URL or asset://
+    /// Last frame image: HTTPS URL, asset://, local path, Base64, or Data URI
     #[arg(long)]
     pub last_frame: Option<String>,
 

@@ -11,7 +11,7 @@ use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::error;
 use crate::api::types::{VideoCreateRequest, VideoReference, VideoStatus, VideoTaskResponse};
 use crate::db::VideoTaskRecord;
-use crate::media::parse_image_inputs;
+use crate::media::{parse_image_inputs, resolve_video_image_input};
 use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url};
 use crate::ratio::{AspectRatio, validate_video_duration, validate_video_ratio, video_size_options};
 use crate::retry::{backoff_delay, is_retryable_http_status};
@@ -524,29 +524,37 @@ fn build_video_body(req: &VideoRequest, model: &str) -> Result<VideoCreateReques
 }
 
 fn resolve_video_media(api: &ApiClient, body: &mut VideoCreateRequest) -> Result<()> {
-    for frame in [&mut body.first_frame, &mut body.last_frame].into_iter().flatten() {
-        *frame = resolve_video_media_url(api, frame)?;
-    }
-    for url in body.images.iter_mut().chain(&mut body.audios) {
-        *url = resolve_video_media_url(api, url)?;
-    }
-    for video in &mut body.videos {
-        video.url = resolve_video_media_url(api, &video.url)?;
-    }
-    Ok(())
+    resolve_video_media_inputs(body, |raw| api.db.resolve_reference(raw))
 }
 
-fn resolve_video_media_url(api: &ApiClient, raw: &str) -> Result<String> {
-    let resolved = api.db.resolve_reference(raw)?;
-    validate_video_media_url(&resolved)?;
-    Ok(resolved)
+fn resolve_video_media_inputs(
+    body: &mut VideoCreateRequest,
+    resolve_reference: impl Fn(&str) -> Result<String>,
+) -> Result<()> {
+    for frame in [&mut body.first_frame, &mut body.last_frame].into_iter().flatten() {
+        *frame = resolve_video_image_input(&resolve_reference(frame)?)?;
+    }
+    for image in &mut body.images {
+        *image = resolve_video_image_input(&resolve_reference(image)?)?;
+    }
+    for audio in &mut body.audios {
+        let resolved = resolve_reference(audio)?;
+        validate_video_media_url(&resolved)?;
+        *audio = resolved;
+    }
+    for video in &mut body.videos {
+        let resolved = resolve_reference(&video.url)?;
+        validate_video_media_url(&resolved)?;
+        video.url = resolved;
+    }
+    Ok(())
 }
 
 fn validate_video_media_url(resolved: &str) -> Result<()> {
     let url = Url::parse(resolved).context("video media requires an HTTPS URL or asset:// reference")?;
     anyhow::ensure!(
         url.scheme() == "https" && url.host_str().is_some(),
-        "video media requires an HTTPS URL or asset:// reference; local paths, base64, and data URIs are not supported"
+        "video audio/video references require an HTTPS URL or asset:// reference; local paths, base64, and data URIs are supported for images only"
     );
     Ok(())
 }
@@ -836,6 +844,266 @@ mod tests {
         assert!(validate_video_media_url("https://example.com/input.png").is_ok());
         for invalid in ["http://example.com/input.png", "./input.png", "data:image/png;base64,abcd", "base64:abcd"] {
             assert!(validate_video_media_url(invalid).is_err());
+        }
+    }
+
+    fn inline_image_fixture(format: image::ImageFormat, mime: &str) -> String {
+        use base64::Engine as _;
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .unwrap();
+        format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    }
+
+    fn video_api_at(address: std::net::SocketAddr) -> ApiClient {
+        ApiClient {
+            client: reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap(),
+            config: crate::config::AppConfig {
+                base_url: format!("http://{address}"),
+                video_model: "agnes-video-2.5-flash".into(),
+                max_retries: 0,
+                ..crate::config::AppConfig::default()
+            },
+            api_key: "fixture-key".into(),
+            db: crate::db::Database::open_memory().unwrap(),
+        }
+    }
+
+    fn fake_video_create_api() -> (ApiClient, thread::JoinHandle<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            let header_end = loop {
+                if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break position + 4;
+                }
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            assert!(headers.starts_with("POST /v1/videos HTTP/1.1\r\n"));
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-key")
+            );
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().unwrap())
+                })
+                .unwrap();
+            while request.len() < header_end + length {
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let body: Value = serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
+            let response = r#"{"video_id":"task_inline_fixture","status":"queued","progress":0}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            )
+            .unwrap();
+            body
+        });
+        (video_api_at(address), server)
+    }
+
+    #[test]
+    fn generate_video_posts_local_and_inline_keyframes_as_jpeg() {
+        use base64::Engine as _;
+        let png = inline_image_fixture(image::ImageFormat::Png, "image/png");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png.split_once(',').unwrap().1)
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("agnes-video-submit-{}.png", rand::random::<u64>()));
+        std::fs::write(&path, &bytes).unwrap();
+        let last_frame = inline_image_fixture(image::ImageFormat::Jpeg, "image/jpeg");
+        for explicit_frames in [true, false] {
+            let (api, server) = fake_video_create_api();
+            let mut req = request();
+            req.quiet = true;
+            if explicit_frames {
+                req.first_frame = Some(path.to_string_lossy().into_owned());
+                req.last_frame = Some(last_frame.clone());
+            } else {
+                req.images = vec![path.to_string_lossy().into_owned()];
+            }
+            let result = generate_video(&api, req).unwrap();
+            let body = server.join().unwrap();
+            assert_eq!(body["mode"], "keyframe");
+            let first = body["first_frame"].as_str().unwrap();
+            assert!(first.starts_with("data:image/jpeg;base64,"));
+            let first_bytes = base64::engine::general_purpose::STANDARD
+                .decode(first.split_once(',').unwrap().1)
+                .unwrap();
+            assert_eq!(image::guess_format(&first_bytes).unwrap(), image::ImageFormat::Jpeg);
+            assert!(body.get("images").is_none());
+            if explicit_frames {
+                assert_eq!(body["last_frame"], last_frame);
+            } else {
+                assert!(body.get("last_frame").is_none());
+            }
+            let record = api.db.get_video_task("task_inline_fixture").unwrap();
+            assert_eq!(result.generation_id, Some(record.id));
+            assert_eq!(record.input_json.unwrap()["first_frame"], first);
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn generate_video_posts_mixed_reference_images_without_changing_urls() {
+        let (api, server) = fake_video_create_api();
+        let asset = api
+            .db
+            .insert_asset("image", "https://example.com/asset.png", None, None)
+            .unwrap();
+        let png = inline_image_fixture(image::ImageFormat::Png, "image/png");
+        let jpeg = inline_image_fixture(image::ImageFormat::Jpeg, "image/jpeg");
+        let mut req = request();
+        req.quiet = true;
+        req.mode = Some("reference".into());
+        req.images =
+            vec![png, "https://example.com/direct.png".into(), asset.asset_uri, jpeg.split_once(',').unwrap().1.into()];
+        generate_video(&api, req).unwrap();
+        let body = server.join().unwrap();
+        assert_eq!(body["mode"], "reference");
+        let images = body["images"].as_array().unwrap();
+        assert_eq!(images.len(), 4);
+        assert!(images[0].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
+        assert_eq!(images[1], "https://example.com/direct.png");
+        assert_eq!(images[2], "https://example.com/asset.png");
+        assert_eq!(images[3], jpeg);
+        assert!(body.get("first_frame").is_none() && body.get("last_frame").is_none());
+        assert_eq!(
+            api.db
+                .get_video_task("task_inline_fixture")
+                .unwrap()
+                .input_json
+                .unwrap()["images"],
+            body["images"]
+        );
+    }
+
+    #[test]
+    fn invalid_inline_inputs_never_reach_the_video_create_endpoint() {
+        for kind in ["image", "audio", "video"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let api = video_api_at(listener.local_addr().unwrap());
+            let mut req = request();
+            req.quiet = true;
+            req.model = Some("agnes-video-2.5".into());
+            match kind {
+                "image" => req.first_frame = Some("data:image/jpeg;base64,AAAA".into()),
+                "audio" => req.audios = vec!["data:audio/wav;base64,AAAA".into()],
+                "video" => {
+                    req.videos = vec![VideoReference {
+                        url: "data:video/mp4;base64,AAAA".into(),
+                        start_seconds: None,
+                        require_audio: false,
+                    }]
+                }
+                _ => unreachable!(),
+            }
+            assert!(generate_video(&api, req).is_err());
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "invalid {kind} reached POST"
+            );
+            assert!(api.db.list_video_tasks(1).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn inline_first_and_last_frames_are_normalized_before_submission() {
+        let mut req = request();
+        req.first_frame = Some(inline_image_fixture(image::ImageFormat::Png, "image/png"));
+        let last_frame = inline_image_fixture(image::ImageFormat::Jpeg, "image/jpeg");
+        req.last_frame = Some(last_frame.clone());
+        let mut body = build_video_body(&req, "agnes-video-2.5-flash").unwrap();
+        resolve_video_media_inputs(&mut body, |raw| Ok(raw.to_string())).unwrap();
+        assert_eq!(body.mode, "keyframe");
+        assert!(body.first_frame.unwrap().starts_with("data:image/jpeg;base64,"));
+        assert_eq!(body.last_frame.as_deref(), Some(last_frame.as_str()));
+        assert!(body.images.is_empty());
+    }
+
+    #[test]
+    fn mixed_reference_images_preserve_data_uri_commas_and_asset_urls() {
+        let png = inline_image_fixture(image::ImageFormat::Png, "image/png");
+        let jpeg = inline_image_fixture(image::ImageFormat::Jpeg, "image/jpeg");
+        let mut req = request();
+        req.images = vec![format!("{png},asset://fixture"), format!("base64:{jpeg}")];
+        let mut body = build_video_body(&req, "agnes-video-2.5-flash").unwrap();
+        resolve_video_media_inputs(&mut body, |raw| {
+            Ok(if raw == "asset://fixture" {
+                "https://example.com/reference.png"
+            } else {
+                raw
+            }
+            .to_string())
+        })
+        .unwrap();
+        assert_eq!(body.mode, "reference");
+        assert_eq!(body.images.len(), 3);
+        assert!(body.images[0].starts_with("data:image/jpeg;base64,"));
+        assert_eq!(body.images[1], "https://example.com/reference.png");
+        assert_eq!(body.images[2], jpeg);
+        assert!(body.first_frame.is_none() && body.last_frame.is_none());
+    }
+
+    #[test]
+    fn invalid_inline_video_images_fail_before_submission() {
+        for reference_mode in [false, true] {
+            let mut req = request();
+            let invalid = "data:image/jpeg;base64,AAAA".to_string();
+            if reference_mode {
+                req.mode = Some("reference".into());
+                req.images = vec![invalid];
+            } else {
+                req.first_frame = Some(invalid);
+            }
+            let mut body = build_video_body(&req, "agnes-video-2.5-flash").unwrap();
+            assert!(resolve_video_media_inputs(&mut body, |raw| Ok(raw.to_string())).is_err());
+        }
+    }
+
+    #[test]
+    fn inline_audio_and_video_references_remain_unsupported() {
+        for video_reference in [false, true] {
+            let mut req = request();
+            if video_reference {
+                req.videos = vec![VideoReference {
+                    url: "data:video/mp4;base64,AAAA".into(),
+                    start_seconds: None,
+                    require_audio: false,
+                }];
+            } else {
+                req.audios = vec!["data:audio/wav;base64,AAAA".into()];
+            }
+            let mut body = build_video_body(&req, "agnes-video-2.5").unwrap();
+            assert!(resolve_video_media_inputs(&mut body, |raw| Ok(raw.to_string())).is_err());
         }
     }
 

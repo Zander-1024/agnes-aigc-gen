@@ -76,6 +76,13 @@ impl VideoTaskRecord {
 }
 
 impl Database {
+    #[cfg(test)]
+    pub(crate) fn open_memory() -> Result<Self> {
+        let db = Self { conn: Connection::open_in_memory()? };
+        db.migrate()?;
+        Ok(db)
+    }
+
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
         if let Some(parent) = path.parent() {

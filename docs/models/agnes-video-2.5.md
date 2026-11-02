@@ -26,7 +26,11 @@
 | `keyframe` | `first_frame`／`last_frame` 至少一个；不与参考数组混用 |
 | `reference` | `images`、`audios`、`videos` 至少一类非空；不与首尾帧混用 |
 
-媒体必须为服务可访问的公共 URL。官网未约定 Base64／Data URI 输入；CLI 对首尾帧、参考图片、音频和视频均只接受 HTTPS URL 或能解析到 HTTPS URL 的 `asset://`，不直接传本地文件或 Base64。`videos` 中的对象包含 `url`，可选非负 `start_seconds` 和布尔 `require_audio`。图片最多 8 张，音频最多 3 段，视频最多 1 个，总文件数最多 12。图片单张 <15 MB、总计 <50 MB、宽高各 256–5760；音频单段 <15 MB、总计 <64 MB、总时长 2–12 秒；视频 <50 MB、2–12 秒、24–60 FPS。CLI 校验模式与数量，文件规格由服务校验。
+CLI 的首帧、尾帧和参考图片支持 HTTPS URL、`asset://`、本地 PNG/JPEG/WebP、裸 Base64、`base64:...` 及 `data:image/...;base64,...`。本地与内联图片会验证内容并统一为 JPEG Data URI；HTTPS URL 和解析后的资产 URL 保持原样。转换保持尺寸、不修改源文件，JPEG 不保留透明通道。音频和视频参考仍只接受 HTTPS URL 或解析到 HTTPS URL 的 `asset://`。
+
+Data URI 能力来自测试网关实测，官网目前仍只约定可公开访问的媒体 URL。2026-11-02 在 `https://apihub-test.agnes-dev.com` 对 Video 2.5 与 2.5 Flash 分别验证 JPEG Data URI 首尾帧（`first_frame`＋`last_frame`）和双图参考（`images`）共 4 个任务，均完成并返回视频 URL，响应 `usage.input_image_count=2`。该实测只覆盖测试网关的 JPEG Data URI，不代表生产网关或原生 PNG/WebP Data URI 已验证；CLI 发送前会将本地及内联图片统一为 JPEG。
+
+`videos` 中的对象包含 `url`，可选非负 `start_seconds` 和布尔 `require_audio`。图片最多 8 张，音频最多 3 段，视频最多 1 个，总文件数最多 12。图片单张 <15 MB、总计 <50 MB、宽高各 256–5760；音频单段 <15 MB、总计 <64 MB、总时长 2–12 秒；视频 <50 MB、2–12 秒、24–60 FPS。CLI 校验模式与数量，文件规格由服务校验。
 
 ```json
 {
@@ -48,6 +52,8 @@
 ```bash
 agnes-aigc-gen video -p "云海上缓慢前进的列车" -d 5 --size 1080P --async
 agnes-aigc-gen video -p "从清晨过渡到傍晚" --first-frame https://example.com/start.png --last-frame https://example.com/end.png
+agnes-aigc-gen video -p "自然过渡到尾帧" --first-frame ./start.png --last-frame ./end.webp
+agnes-aigc-gen video -p "融合 <Picture 1> 和 <Picture 2>" --mode reference -i ./person.png -i ./scene.jpg
 agnes-aigc-gen video -p "跟随 <Video 1> 的动作" --video '{"url":"https://example.com/motion.mp4","start_seconds":2,"require_audio":false}'
 agnes-aigc-gen task wait 3
 ```

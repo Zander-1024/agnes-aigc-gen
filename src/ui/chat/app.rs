@@ -422,13 +422,14 @@ fn ensure_ui_permission(state: &mut ChatUiState, tx: mpsc::UnboundedSender<UiEve
 
 fn start_agent_run(
     state: &mut ChatUiState,
-    agent: crate::agent::runner::AgnesAgentConfig,
+    mut agent: crate::agent::runner::AgnesAgentConfig,
     session: ChatSession,
     history: Vec<Message>,
     tx: mpsc::UnboundedSender<UiEvent>,
     runtime: &tokio::runtime::Runtime,
     status: &str,
 ) -> Result<()> {
+    agent.runtime.session_id = Some(session.id.clone());
     state.session = Some(session);
     state.busy = true;
     state.run_phase = RunPhase::Waiting;

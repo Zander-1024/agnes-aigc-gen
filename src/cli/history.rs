@@ -27,6 +27,13 @@ pub enum HistoryAction {
     },
     /// Show a generation record by id
     Show { id: i64 },
+    /// List recent HTTP request parameter snapshots (including failed requests)
+    Requests {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Show effective parameters and configuration fingerprint for a request
+    Request { id: i64 },
 }
 
 #[derive(Args)]
@@ -77,6 +84,10 @@ pub fn run_history(cmd: HistoryCmd) -> Result<()> {
             let row = db.get_generation(id)?;
             println!("{}", serde_json::to_string_pretty(&row)?);
         }
+        HistoryAction::Requests { limit } => {
+            println!("{}", serde_json::to_string_pretty(&db.list_request_runs(limit)?)?)
+        }
+        HistoryAction::Request { id } => println!("{}", serde_json::to_string_pretty(&db.get_request_run(id)?)?),
     }
     Ok(())
 }

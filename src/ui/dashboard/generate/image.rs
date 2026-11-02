@@ -35,9 +35,41 @@ pub struct ImageForm {
     pub editing: bool,
     pub show_help: bool,
     pub field_error: Option<String>,
+    seed_edited: bool,
 }
 
 impl ImageForm {
+    pub fn from_config(config: &crate::config::AppConfig) -> anyhow::Result<Self> {
+        use anyhow::Context as _;
+        let mut form = Self::new();
+        let resolved = config.request_params.resolve(
+            crate::config::RequestKind::Image,
+            &config.image_model,
+            &serde_json::json!({"ratio":"1:1","size":"1K","extra_body":{}}),
+            &serde_json::json!({}),
+        )?;
+        let ratio = resolved.body["ratio"]
+            .as_str()
+            .context("image ratio must be a string")?;
+        crate::ratio::validate_image_ratio(&crate::ratio::AspectRatio::parse(ratio)?)?;
+        form.ratio.index = default_ratio_index(&form.ratio_options, ratio);
+        let size = crate::ratio::ImageResolutionTier::parse(
+            resolved.body["size"].as_str().context("image size must be a string")?,
+        )?;
+        form.size.index = form
+            .size
+            .options
+            .iter()
+            .position(|value| value == size.as_str())
+            .unwrap_or(0);
+        if let Some(seed) = resolved.body.pointer("/extra_body/seed") {
+            let seed = seed.as_u64().context("image seed must be an integer")?;
+            anyhow::ensure!(seed <= 999, "image seed must be from 0 to 999");
+            form.seed = TextInput::new(seed.to_string());
+        }
+        Ok(form)
+    }
+
     pub fn new() -> Self {
         let ratio_options = ratio::image_ratio_options();
         let ratio_labels: Vec<String> = ratio_options.iter().map(ratio_option_display).collect();
@@ -62,6 +94,7 @@ impl ImageForm {
             editing: false,
             show_help: false,
             field_error: None,
+            seed_edited: false,
         }
     }
 
@@ -97,6 +130,17 @@ impl ImageForm {
         }
         let trimmed = self.seed.value.trim();
         if trimmed.is_empty() { None } else { trimmed.parse().ok() }
+    }
+
+    pub fn request_explicit(&self) -> serde_json::Value {
+        let ratio = ratio_from_index(&self.ratio_options, self.ratio.index)
+            .map(|ratio| ratio.label())
+            .unwrap_or_default();
+        let mut body = serde_json::json!({"ratio":ratio,"size":self.size_tier_value().as_str()});
+        if self.seed_edited && self.seed.value.trim().is_empty() {
+            body["extra_body"]["seed"] = serde_json::Value::Null;
+        }
+        body
     }
 
     pub fn handle_key(
@@ -215,6 +259,15 @@ impl ImageForm {
         key: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) -> ImageFormAction {
+        if self.section == ImageSection::Params
+            && self.param_focus == 3
+            && matches!(
+                key,
+                crossterm::event::KeyCode::Char(_) | crossterm::event::KeyCode::Backspace
+            )
+        {
+            self.seed_edited = true;
+        }
         if key == crossterm::event::KeyCode::Enter && modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
             self.editing = false;
             return ImageFormAction::Submit;
@@ -415,4 +468,41 @@ pub enum ImageFormAction {
     Back,
     Submit,
     PickAsset,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn clearing_prefilled_seed_is_an_explicit_random_seed_override() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let config = crate::config::AppConfig {
+            request_params: serde_json::from_value(serde_json::json!({"image":{"body":{"extra_body":{"seed":9}}}}))
+                .unwrap(),
+            ..Default::default()
+        };
+        let mut form = ImageForm::from_config(&config).unwrap();
+        assert_eq!(form.seed_value(), Some(9));
+        form.section = ImageSection::Params;
+        form.param_focus = 3;
+        form.handle_edit_key(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(form.seed_value(), None);
+        assert!(form.request_explicit().pointer("/extra_body/seed").unwrap().is_null());
+    }
+    #[test]
+    fn image_form_displays_configured_defaults_without_changing_empty_defaults() {
+        let mut config = crate::config::AppConfig::default();
+        let empty = ImageForm::from_config(&config).unwrap();
+        assert!(empty.ratio.current().contains("1:1"));
+        assert_eq!(empty.size.current(), "1K");
+        assert_eq!(empty.seed_value(), None);
+        config.request_params = serde_json::from_value(
+            serde_json::json!({"image":{"body":{"ratio":"16:9","size":"2K","extra_body":{"seed":33}}}}),
+        )
+        .unwrap();
+        let form = ImageForm::from_config(&config).unwrap();
+        assert!(form.ratio.current().contains("16:9"));
+        assert_eq!(form.size.current(), "2K");
+        assert_eq!(form.seed_value(), Some(33));
+    }
 }

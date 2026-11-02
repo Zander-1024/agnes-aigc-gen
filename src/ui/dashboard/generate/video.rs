@@ -40,14 +40,29 @@ pub struct VideoForm {
     pub show_help: bool,
     pub field_error: Option<String>,
     pub chain_uri: Option<String>,
+    defaults: crate::config::RequestParams,
+    dirty: [bool; 4],
+    defaults_error: Option<String>,
 }
 
 impl VideoForm {
+    #[cfg(test)]
     pub fn new() -> Self {
+        let config = crate::config::AppConfig::load().unwrap_or_default();
+        Self::from_config(&config).unwrap_or_else(|_| Self::bare(&config.video_model))
+    }
+
+    pub fn from_config(config: &crate::config::AppConfig) -> anyhow::Result<Self> {
+        let mut form = Self::bare(&config.video_model);
+        form.defaults = config.request_params.clone();
+        form.apply_defaults()?;
+        Ok(form)
+    }
+
+    fn bare(configured: &str) -> Self {
         let ratio_options = ratio::video_ratio_options();
         let ratio_labels: Vec<String> = ratio_options.iter().map(|option| option.label.clone()).collect();
         let ratio_index = default_ratio_index(&ratio_options, "16:9");
-        let configured = crate::config::AppConfig::load().unwrap_or_default().video_model;
         let model_index = usize::from(configured == "agnes-video-2.5-flash");
         let mut form = Self {
             prompt: TextArea::new(),
@@ -70,9 +85,86 @@ impl VideoForm {
             show_help: false,
             field_error: None,
             chain_uri: None,
+            defaults: Default::default(),
+            dirty: [false; 4],
+            defaults_error: None,
         };
         form.sync_sizes();
         form
+    }
+
+    fn apply_defaults(&mut self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        let resolved = self.defaults.resolve(
+            crate::config::RequestKind::Video,
+            self.model.current(),
+            &serde_json::json!({"aspect_ratio":"16:9","size":"720P","seconds":"5"}),
+            &serde_json::json!({}),
+        )?;
+        if !self.dirty[0] {
+            let ratio = resolved.body["aspect_ratio"]
+                .as_str()
+                .context("video aspect_ratio must be a string")?;
+            crate::ratio::validate_video_ratio(&crate::ratio::AspectRatio::parse(ratio)?)?;
+            self.ratio.index = default_ratio_index(&self.ratio_options, ratio);
+        }
+        if !self.dirty[1] {
+            let seconds = resolved.body["seconds"]
+                .as_str()
+                .context("video seconds must be a string")?;
+            crate::ratio::validate_video_duration(seconds.parse().context("invalid video seconds")?)?;
+            self.duration = TextInput::new(seconds);
+        }
+        self.sync_sizes();
+        if !self.dirty[2] {
+            let size = resolved.body["size"]
+                .as_str()
+                .context("video size must be a string")?
+                .to_ascii_uppercase();
+            self.size.index = self
+                .size
+                .options
+                .iter()
+                .position(|value| value == &size)
+                .context("configured video size is unsupported by selected model")?;
+        }
+        if !self.dirty[3] {
+            self.seed = match resolved.body.get("seed") {
+                Some(seed) => TextInput::new(
+                    u32::try_from(seed.as_u64().context("video seed must be an unsigned integer")?)
+                        .context("video seed exceeds u32")?
+                        .to_string(),
+                ),
+                None => TextInput::empty(),
+            };
+        }
+        Ok(())
+    }
+
+    fn refresh_defaults(&mut self) {
+        match self.apply_defaults() {
+            Ok(()) => {
+                if self.defaults_error.take().is_some() {
+                    self.field_error = None;
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.defaults_error = Some(message.clone());
+                self.field_error = Some(message);
+            }
+        }
+    }
+
+    pub fn request_explicit(&self) -> serde_json::Value {
+        let ratio = ratio_from_index(&self.ratio_options, self.ratio.index)
+            .map(|ratio| ratio.label())
+            .unwrap_or_default();
+        let mut body = serde_json::json!({"aspect_ratio":ratio,"size":self.size.current(),"seconds":self.duration_value().to_string()});
+        if self.dirty[3] && self.seed.value.trim().is_empty() {
+            body["seed"] = serde_json::Value::Null;
+        }
+        body
     }
 
     pub fn duration_value(&self) -> f64 {
@@ -81,11 +173,18 @@ impl VideoForm {
 
     fn sync_sizes(&mut self) {
         let previous = self.size.current().to_string();
-        let options: Vec<String> = ratio::video_size_options(self.model.current())
+        let mut options: Vec<String> = ratio::video_size_options(self.model.current())
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let index = options.iter().position(|size| size == &previous).unwrap_or(0);
+        let index = match options.iter().position(|size| size == &previous) {
+            Some(index) => index,
+            None if self.dirty[2] => {
+                options.push(previous);
+                options.len() - 1
+            }
+            None => 0,
+        };
         self.size = SelectField::new(options, index);
     }
 
@@ -250,6 +349,9 @@ impl VideoForm {
     }
 
     fn cycle_selection(&mut self, forward: bool) {
+        if matches!(self.param_focus, 0 | 2) {
+            self.dirty[self.param_focus] = true;
+        }
         let field = match self.param_focus {
             0 => &mut self.ratio,
             2 => &mut self.size,
@@ -261,9 +363,7 @@ impl VideoForm {
         } else {
             field.previous();
         }
-        if self.param_focus == 7 {
-            self.sync_sizes();
-        }
+        self.refresh_defaults();
     }
 
     fn handle_edit_key(
@@ -271,6 +371,15 @@ impl VideoForm {
         key: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) -> VideoFormAction {
+        let editing_default = self.section == VideoSection::Params
+            && matches!(self.param_focus, 1 | 3)
+            && matches!(
+                key,
+                crossterm::event::KeyCode::Char(_) | crossterm::event::KeyCode::Backspace
+            );
+        if editing_default {
+            self.dirty[self.param_focus] = true;
+        }
         if key == crossterm::event::KeyCode::Enter && modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
             self.editing = false;
             return VideoFormAction::Submit;
@@ -302,6 +411,9 @@ impl VideoForm {
             },
             VideoSection::Media => {}
         }
+        if editing_default {
+            self.refresh_defaults();
+        }
         VideoFormAction::None
     }
 
@@ -331,6 +443,10 @@ impl VideoForm {
     }
 
     pub fn validate(&mut self) -> Result<(), String> {
+        if let Some(error) = &self.defaults_error {
+            self.field_error = Some(error.clone());
+            return Err(error.clone());
+        }
         self.field_error = None;
         if self.prompt.text().trim().is_empty() {
             self.field_error = Some("prompt is required".into());
@@ -362,6 +478,12 @@ impl VideoForm {
             self.field_error = Some(format!("{err:#}"));
             self.section = VideoSection::Params;
             self.param_focus = 1;
+            return Err(self.field_error.clone().unwrap());
+        }
+        if !ratio::video_size_options(self.model.current()).contains(&self.size.current()) {
+            self.field_error = Some("selected size is unsupported by this model".into());
+            self.section = VideoSection::Params;
+            self.param_focus = 2;
             return Err(self.field_error.clone().unwrap());
         }
         if !self.seed.value.trim().is_empty() && self.seed_value().is_none() {
@@ -528,6 +650,79 @@ pub enum VideoFormAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clearing_prefilled_video_seed_is_an_explicit_omission() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let config = crate::config::AppConfig {
+            request_params: serde_json::from_value(serde_json::json!({"video":{"body":{"seed":9}}})).unwrap(),
+            ..Default::default()
+        };
+        let mut form = VideoForm::from_config(&config).unwrap();
+        assert_eq!(form.seed_value(), Some(9));
+        form.section = VideoSection::Params;
+        form.param_focus = 3;
+        form.handle_edit_key(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(form.seed_value(), None);
+        assert!(form.request_explicit().get("seed").unwrap().is_null());
+    }
+
+    #[test]
+    fn invalid_model_defaults_keep_submission_blocked_until_explicitly_fixed() {
+        let config = crate::config::AppConfig {
+            request_params: serde_json::from_value(serde_json::json!({"video":{"body":{"size":"1080P"}}})).unwrap(),
+            ..Default::default()
+        };
+        let mut form = VideoForm::from_config(&config).unwrap();
+        form.prompt.push_char('x');
+        form.param_focus = 7;
+        form.cycle_selection(true);
+        assert_eq!(form.model.current(), "agnes-video-2.5-flash");
+        assert!(form.validate().is_err());
+        assert!(form.validate().is_err());
+        form.param_focus = 2;
+        form.cycle_selection(true);
+        assert_eq!(form.size.current(), "720P");
+        assert!(form.validate().is_ok());
+    }
+
+    #[test]
+    fn model_defaults_update_untouched_fields_and_keep_user_edits() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let config = crate::config::AppConfig {
+            request_params:serde_json::from_value(serde_json::json!({"video":{"body":{"aspect_ratio":"9:16","seconds":"8","size":"1080P"},"models":{"agnes-video-2.5-flash":{"body":{"size":"720P","seconds":"4"}}}}})).unwrap(),
+            ..crate::config::AppConfig::default()
+        };
+        let mut untouched = VideoForm::from_config(&config).unwrap();
+        assert_eq!(untouched.duration_value(), 8.0);
+        assert_eq!(untouched.size.current(), "1080P");
+        untouched.param_focus = 7;
+        untouched.cycle_selection(true);
+        assert_eq!(untouched.duration_value(), 4.0);
+        assert_eq!(untouched.size.current(), "720P");
+
+        let mut edited = VideoForm::from_config(&config).unwrap();
+        edited.section = VideoSection::Params;
+        edited.param_focus = 1;
+        edited.handle_edit_key(KeyCode::Backspace, KeyModifiers::NONE);
+        edited.handle_edit_key(KeyCode::Char('7'), KeyModifiers::NONE);
+        edited.param_focus = 7;
+        edited.cycle_selection(true);
+        assert_eq!(edited.duration_value(), 7.0);
+        assert_eq!(edited.size.current(), "720P");
+    }
+
+    #[test]
+    fn model_switch_does_not_silently_replace_explicit_unsupported_size() {
+        let mut form = VideoForm::from_config(&crate::config::AppConfig::default()).unwrap();
+        form.prompt.push_char('x');
+        form.param_focus = 2;
+        form.cycle_selection(true);
+        assert_eq!(form.size.current(), "1080P");
+        form.param_focus = 7;
+        form.cycle_selection(true);
+        assert_eq!(form.size.current(), "1080P");
+        assert!(form.validate().unwrap_err().contains("unsupported"));
+    }
 
     #[test]
     fn ratio_stays_selectable_for_reference_images() {

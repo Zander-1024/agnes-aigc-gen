@@ -86,6 +86,17 @@ API key is encrypted in `{config_dir}/config.toml`. Full setup: [docs/SETUP.md](
 | `chat_max_output_tokens` | `65536` | Chat max output |
 | `output_dir` | `.` | Used with `--save` only |
 
+Request defaults for text, image, and video are independent and empty by default. Configure known or vendor-specific JSON fields incrementally; explicit command arguments override matching values while retaining other defaults:
+
+```bash
+agnes-aigc-gen config params set text /temperature 0.4
+agnes-aigc-gen config params set image /size '"2K"'
+agnes-aigc-gen config params show image
+agnes-aigc-gen history requests --limit 10
+```
+
+See [request defaults and records](docs/SETUP.md#optional-request-defaults) for nested merging, per-model settings, and effective request snapshots.
+
 ## Usage
 
 Every option has a long form (`--prompt`, `--ratio`, …). Short forms (`-p`, `-r`, …) are optional shortcuts — see [SKILL.md](skills/agnes-aigc-gen/SKILL.md) for the full table.

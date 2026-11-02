@@ -8,7 +8,7 @@ use pi_ai::{AssistantMessageEvent, Content, Context, Message, StopReason, ToolRe
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::agent::agnes_stream::{AgnesStreamOptions, stream_agnes};
+use crate::agent::agnes_stream::stream_agnes;
 use crate::agent::chat::ChatRuntimeConfig;
 
 #[derive(Clone)]
@@ -53,10 +53,8 @@ pub async fn run_agnes_agent_with_history(
             messages: messages.clone(),
             tools: tool_defs.clone(),
         };
-        let stream_options = AgnesStreamOptions {
-            stream: config.runtime.stream.clone(),
-            enable_thinking: config.runtime.enable_thinking,
-        };
+        let mut stream_options = config.runtime.stream_options();
+        stream_options.turn = Some(turn);
         let mut stream = stream_agnes(&config.runtime.model, &ctx, &stream_options).await?;
         let mut final_message = None;
         let mut stop = StopReason::Stop;

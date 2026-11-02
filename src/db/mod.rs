@@ -14,6 +14,16 @@ pub struct Database {
     conn: Connection,
 }
 
+pub struct RequestRunInput<'a> {
+    pub kind: &'a str,
+    pub model: &'a str,
+    pub endpoint: &'a str,
+    pub config_hash: &'a str,
+    pub layers: &'a [String],
+    pub body: &'a Value,
+    pub body_hash: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetRecord {
     pub id: String,
@@ -141,6 +151,26 @@ impl Database {
             );
 
             CREATE INDEX IF NOT EXISTS idx_video_tasks_updated ON video_tasks(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS request_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                model TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                config_layers_json TEXT NOT NULL,
+                effective_params_json TEXT NOT NULL,
+                body_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                http_status INTEGER,
+                remote_id TEXT,
+                session_id TEXT,
+                turn_no INTEGER,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             ",
         )?;
         self.migrate_video_tasks_local_id()?;
@@ -255,6 +285,77 @@ impl Database {
                 },
             )
             .with_context(|| format!("asset not found: asset://{id}"))
+    }
+
+    pub fn start_request_run(&self, input: &RequestRunInput<'_>) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO request_runs (kind, model, endpoint, config_hash, config_layers_json, effective_params_json, body_hash, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?8)",
+            params![input.kind, input.model, input.endpoint, input.config_hash, serde_json::to_string(input.layers)?, serde_json::to_string(input.body)?, input.body_hash, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn request_attempt(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE request_runs SET attempts = attempts + 1, updated_at = ?2 WHERE id = ?1",
+            params![id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_request_run(
+        &self,
+        id: i64,
+        status: &str,
+        http_status: Option<u16>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute("UPDATE request_runs SET status = ?2, http_status = COALESCE(?3, http_status), error = ?4, updated_at = ?5 WHERE id = ?1", params![id, status, http_status, error, Utc::now().to_rfc3339()])?;
+        Ok(())
+    }
+
+    pub fn link_request_remote_id(&self, id: i64, remote_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE request_runs SET remote_id = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, remote_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn link_request_context(&self, id: i64, session_id: Option<&str>, turn: Option<u32>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE request_runs SET session_id = ?2, turn_no = ?3 WHERE id = ?1",
+            params![id, session_id, turn],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_request_run(&self, id: i64) -> Result<Value> {
+        self.conn.query_row(
+            "SELECT id, kind, model, endpoint, config_hash, config_layers_json, effective_params_json, body_hash, status, attempts, http_status, remote_id, error, created_at, updated_at, session_id, turn_no FROM request_runs WHERE id = ?1",
+            [id],
+            |row| Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?, "kind": row.get::<_, String>(1)?, "model": row.get::<_, String>(2)?,
+                "endpoint": row.get::<_, String>(3)?, "config_hash": row.get::<_, String>(4)?,
+                "config_layers": parse_json_col(row.get(5)?)?, "effective_params": parse_json_col(row.get(6)?)?,
+                "body_hash": row.get::<_, String>(7)?, "status": row.get::<_, String>(8)?, "attempts": row.get::<_, i64>(9)?,
+                "http_status": row.get::<_, Option<u16>>(10)?, "remote_id": row.get::<_, Option<String>>(11)?,
+                "error": row.get::<_, Option<String>>(12)?, "created_at": row.get::<_, String>(13)?, "updated_at": row.get::<_, String>(14)?,
+                "session_id": row.get::<_, Option<String>>(15)?, "turn": row.get::<_, Option<u32>>(16)?
+            })),
+        ).with_context(|| format!("request #{id} not found"))
+    }
+
+    pub fn list_request_runs(&self, limit: usize) -> Result<Vec<Value>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id FROM request_runs ORDER BY id DESC LIMIT ?1")?;
+        let ids: Vec<i64> = statement
+            .query_map([limit as i64], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        ids.into_iter().map(|id| self.get_request_run(id)).collect()
     }
 
     pub fn insert_generation(

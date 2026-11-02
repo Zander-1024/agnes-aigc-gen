@@ -1,9 +1,11 @@
 mod defaults;
+mod request_params;
 
 pub use defaults::*;
+pub use request_params::{RequestKind, RequestParams, deep_merge};
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -13,6 +15,8 @@ use crate::crypto;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(skip)]
+    pub request_params: RequestParams,
     pub base_url: String,
     pub text_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,6 +39,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            request_params: RequestParams::default(),
             base_url: DEFAULT_BASE_URL.to_string(),
             text_model: DEFAULT_TEXT_MODEL.to_string(),
             thinking_text_model: None,
@@ -64,18 +69,25 @@ impl AppConfig {
     }
 
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        toml::from_str(&raw).context("parse config.toml")
+        Self::load_from_dir(&Self::config_dir()?)
+    }
+
+    fn load_from_dir(directory: &Path) -> Result<Self> {
+        let path = directory.join("config.toml");
+        let mut config = if path.exists() {
+            let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            toml::from_str(&raw).context("parse config.toml")?
+        } else {
+            Self::default()
+        };
+        config.request_params = RequestParams::load_from_path(&directory.join("request_params.json"))?;
+        Ok(config)
     }
 
     pub fn save(&self) -> Result<()> {
         let dir = Self::config_dir()?;
         fs::create_dir_all(&dir)?;
-        let path = dir.join("config.toml");
+        let path = Self::config_path()?;
         let raw = toml::to_string_pretty(self).context("serialize config")?;
         fs::write(&path, raw).with_context(|| format!("write {}", path.display()))
     }
@@ -298,12 +310,33 @@ mod tests {
         assert_eq!(parse_token_limit("64K").unwrap(), 65_536);
         assert_eq!(parse_token_limit("1024").unwrap(), 1024);
     }
+
+    #[test]
+    fn request_defaults_load_without_main_config_and_are_not_serialized_into_toml() {
+        let directory = std::env::temp_dir().join(format!("agnes-config-defaults-{}", rand::random::<u64>()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("request_params.json"),
+            r#"{"text":{"body":{"temperature":0.4}}}"#,
+        )
+        .unwrap();
+        let config = AppConfig::load_from_dir(&directory).unwrap();
+        assert_eq!(config.request_params.text.body["temperature"], 0.4);
+        let toml = toml::to_string_pretty(&config).unwrap();
+        assert!(!toml.contains("request_params") && !toml.contains("temperature"));
+        fs::write(directory.join("config.toml"), toml).unwrap();
+        let loaded = AppConfig::load_from_dir(&directory).unwrap();
+        assert_eq!(loaded.request_params.text.body, config.request_params.text.body);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
     /// Show current configuration
     Show,
+    /// Manage independent text, image, and video request defaults.
+    Params(request_params::ParamsCmd),
     /// Set a configuration value (incremental merge). Run without arguments to list keys.
     Set {
         /// Config key (e.g. api-key, base-url). Omit to list all keys.
@@ -321,6 +354,7 @@ pub struct ConfigCmd {
 
 pub fn run(cmd: ConfigCmd) -> Result<()> {
     match cmd.action {
+        ConfigAction::Params(params) => params.run()?,
         ConfigAction::Show => {
             let cfg = AppConfig::load()?;
             let resolved_out = cfg.resolved_output_dir().ok();
@@ -341,6 +375,10 @@ pub fn run(cmd: ConfigCmd) -> Result<()> {
             }
             println!("save_local   = {}", cfg.save_local);
             println!("max_retries  = {}", cfg.max_retries);
+            println!(
+                "request_params = {}  (config params show text|image|video)",
+                RequestParams::path()?.display()
+            );
             println!(
                 "api_key      = {}",
                 if cfg.api_key_encrypted.is_some() {

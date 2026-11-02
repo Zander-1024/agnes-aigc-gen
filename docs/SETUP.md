@@ -22,8 +22,8 @@ curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/master/i
 **Pin a version:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.5.1/install-remote.sh -o /tmp/agnes-install.sh
-AGNES_AIGC_VERSION=0.5.1 bash /tmp/agnes-install.sh
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.6.0/install-remote.sh -o /tmp/agnes-install.sh
+AGNES_AIGC_VERSION=0.6.0 bash /tmp/agnes-install.sh
 ```
 
 **Windows (PowerShell):**
@@ -266,6 +266,46 @@ Copying `config.toml` to another machine does not transfer a usable key.
 
 ---
 
+### Optional request defaults
+
+Text, image, and video defaults are independent. They are empty unless configured, so upgrades preserve existing behavior. The optional `{config_dir}/request_params.json` is separate from `config.toml` and supports JSON objects, arrays, numbers, booleans, strings, and `null`.
+
+```json
+{
+  "version": 1,
+  "text": {"body": {"temperature": 0.4}},
+  "image": {"body": {"size": "2K", "extra_body": {"seed": 123}}},
+  "video": {
+    "body": {"seconds": "4"},
+    "models": {"agnes-video-2.5-flash": {"body": {"size": "720P"}}}
+  }
+}
+```
+
+Merge order is built-in defaults, type defaults, model defaults, then explicitly supplied command/tool parameters. Objects merge recursively: updating one child preserves its siblings. Arrays and scalar values replace only their own field. JSON `null` is a literal value; use `unset` to remove a configured field. Unknown request fields are preserved and sent to the server; server support is not implied. Known fields still undergo normal validation and media normalization. Model selection and text `messages`, `tools`, `stream`, and `stream_options` are managed by the CLI; multiple-result `n` values are unsupported.
+
+```bash
+agnes-aigc-gen config params set text /temperature 0.4
+agnes-aigc-gen config params set text /chat_template_kwargs '{"enable_thinking":false,"custom_mode":"example"}'
+# Updates enable_thinking while retaining custom_mode:
+agnes-aigc-gen config params set text /chat_template_kwargs '{"enable_thinking":true}'
+agnes-aigc-gen config params set image /size '"2K"'
+agnes-aigc-gen config params set video /size '"720P"' --model agnes-video-2.5-flash
+agnes-aigc-gen config params show video --model agnes-video-2.5-flash
+agnes-aigc-gen config params unset text /temperature
+```
+
+Paths use JSON Pointer (`/extra_body/seed`); values use JSON syntax, including quotes around string values. `set` merges object values rather than replacing the whole configuration. Text/image/video and other model sections remain intact. An empty pointer targets the whole body; use `unset <type> ''` to clear that scope. Files are validated before saving through an atomic replacement. Extra configuration is optional, and setting ordinary `config.toml` keys leaves it intact.
+
+An explicitly supplied empty media array replaces configured media. Clearing a seed in the dashboard disables the configured fixed seed: optional seed `null` is normalized to a fresh random image seed or an omitted video seed. Other unknown JSON fields retain literal `null` values.
+
+Each HTTP creation/chat request records a local request ID, final model/gateway, selected configuration fingerprint, effective parameter snapshot, attempts, and outcome in SQLite. Prompt/messages and inline images are summarized with hashes; known credentials and URL user information are redacted. Error details are represented by a hash and byte count; HTTP status is retained. Text records also identify their session and agent turn. Media generation/task records contain the request ID. `accepted` means an asynchronous video was created, not completed; check the task for its final outcome. Failed HTTP requests and response-parsing failures are recorded too. Retry attempts reuse the same body and configuration snapshot; existing video queries keep the creation model and do not receive creation defaults.
+
+```bash
+agnes-aigc-gen history requests --limit 20
+agnes-aigc-gen history request 12
+```
+
 ## 5. Post-setup checklist
 
 Before using the CLI in agent workflows:
@@ -308,11 +348,11 @@ Interactive `self update` offers:
 
 A `403 rate limit exceeded` response from `api.github.com/.../releases/latest` means the GitHub version lookup was rate-limited. Since v0.5.1, version lookup falls back to the official GitHub `releases/latest` page when the API lookup fails. Older installed binaries can still report this error.
 
-To install the published v0.5.1 without querying the API, pin the version on the process that runs the installer:
+To install the published v0.6.0 without querying the API, pin the version on the process that runs the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.5.1/install-remote.sh -o /tmp/agnes-install.sh
-AGNES_AIGC_VERSION=0.5.1 bash /tmp/agnes-install.sh
+curl -fsSL https://raw.githubusercontent.com/Zander-1024/agnes-aigc-gen/v0.6.0/install-remote.sh -o /tmp/agnes-install.sh
+AGNES_AIGC_VERSION=0.6.0 bash /tmp/agnes-install.sh
 ```
 
 This installs the binary and the default agent skill. Set the documented `INSTALL_AGENTS` or `INSTALL_SKILL_DIR` options if you also use other skill locations. Existing API configuration and generation history are preserved. Setting `AGNES_AIGC_VERSION` only on `curl` does not pass it to a piped `bash` process.

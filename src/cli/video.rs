@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use clap::Args;
+use serde_json::{Value, json};
 
 use crate::api::{ApiClient, VideoReference, VideoRequest, generate_video};
 use crate::cli::task::resolve_task_ref;
 use crate::cli::util::parse_output_format;
 use crate::config::AppConfig;
-use crate::ratio::{AspectRatio, validate_video_duration, video_dimensions_for_size};
+use crate::ratio::AspectRatio;
 
 #[derive(Args)]
 pub struct VideoArgs {
@@ -22,20 +23,20 @@ pub struct VideoArgs {
     pub mode: Option<String>,
 
     /// Output resolution tier (Flash supports 720P only)
-    #[arg(long, default_value = "720P", value_parser = ["720P", "1080P", "1K", "2K"])]
-    pub size: String,
+    #[arg(long, value_parser = ["720P", "1080P", "1K", "2K"])]
+    pub size: Option<String>,
 
     /// Fixed seed for reproducible generation. Omitted = not sent to API.
     #[arg(short = 's', long = "seed")]
     pub seed: Option<u32>,
 
     /// Output aspect ratio (e.g. 16:9)
-    #[arg(short = 'r', long = "ratio", default_value = "16:9")]
-    pub ratio: String,
+    #[arg(short = 'r', long = "ratio")]
+    pub ratio: Option<String>,
 
     /// Target duration in whole seconds (4–12)
-    #[arg(short = 'd', long = "duration", default_value_t = 5.0)]
-    pub duration: f64,
+    #[arg(short = 'd', long = "duration")]
+    pub duration: Option<f64>,
 
     /// Input images: HTTPS URL, asset://, local path, Base64, or Data URI (repeatable or comma-separated)
     #[arg(short = 'i', long = "image")]
@@ -92,7 +93,8 @@ pub fn run(args: VideoArgs) -> Result<()> {
     if let Some(model) = &args.model {
         cfg.video_model = model.clone();
     }
-    let ratio = AspectRatio::parse(&args.ratio)?;
+    let explicit = args.request_explicit();
+    let ratio = AspectRatio::parse(args.ratio.as_deref().unwrap_or("16:9"))?;
     let output_format = parse_output_format(&args.output_format)?;
 
     let prompt = match (&args.prompt, &args.task_id) {
@@ -100,11 +102,6 @@ pub fn run(args: VideoArgs) -> Result<()> {
         (None, Some(_)) => String::new(),
         (None, None) => anyhow::bail!("--prompt is required unless --task-id is provided"),
     };
-
-    if args.task_id.is_none() {
-        validate_video_duration(args.duration)?;
-        video_dimensions_for_size(&ratio, &args.size, cfg.video_model == "agnes-video-2.5-flash")?;
-    }
 
     let api = ApiClient::with_overrides(cfg, args.output_dir.clone(), None, args.retries)?;
     let async_mode = args.async_mode && args.task_id.is_none();
@@ -119,14 +116,15 @@ pub fn run(args: VideoArgs) -> Result<()> {
             prompt,
             model: args.model,
             mode: args.mode,
-            size: args.size,
+            size: args.size.unwrap_or_else(|| "720P".into()),
+            explicit,
             first_frame: args.first_frame,
             last_frame: args.last_frame,
             audios: args.audios,
             videos: args.videos,
             seed: args.seed,
             ratio,
-            duration: args.duration,
+            duration: args.duration.unwrap_or(5.0),
             images: args.images,
             task_id,
             async_mode,
@@ -155,5 +153,43 @@ mod tests {
         .unwrap();
         assert_eq!(video.start_seconds, Some(2.5));
         assert!(video.require_audio);
+    }
+}
+
+impl VideoArgs {
+    fn request_explicit(&self) -> Value {
+        let mut body = json!({});
+        if let Some(ratio) = &self.ratio {
+            body["aspect_ratio"] = json!(ratio);
+        }
+        if let Some(size) = &self.size {
+            body["size"] = json!(size);
+        }
+        if let Some(duration) = self.duration {
+            body["seconds"] = json!(duration.to_string());
+        }
+        body
+    }
+}
+
+#[cfg(test)]
+mod explicit_tests {
+    use super::*;
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Command {
+        #[command(flatten)]
+        args: VideoArgs,
+    }
+    #[test]
+    fn omitted_video_options_do_not_become_explicit_overrides() {
+        let omitted = Command::parse_from(["video", "-p", "hello"]).args;
+        assert_eq!(omitted.request_explicit(), json!({}));
+        let explicit =
+            Command::parse_from(["video", "-p", "hello", "--ratio", "16:9", "--size", "720P", "-d", "5"]).args;
+        assert_eq!(
+            explicit.request_explicit(),
+            json!({"aspect_ratio":"16:9","size":"720P","seconds":"5"})
+        );
     }
 }

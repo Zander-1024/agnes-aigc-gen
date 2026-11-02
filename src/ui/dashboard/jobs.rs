@@ -20,6 +20,7 @@ pub struct ImageJobParams {
     pub inputs: Vec<String>,
     pub count: u32,
     pub seed: Option<u32>,
+    pub explicit: serde_json::Value,
     pub output_dir: Option<String>,
     pub save_local: bool,
 }
@@ -32,6 +33,7 @@ pub struct VideoJobParams {
     pub duration: f64,
     pub images: Vec<String>,
     pub seed: Option<u32>,
+    pub explicit: serde_json::Value,
     pub output_dir: Option<String>,
     pub save_local: bool,
     pub async_mode: bool,
@@ -92,10 +94,12 @@ fn run_image_job(params: ImageJobParams) -> Result<JobEvent> {
             &api,
             ImageRequest {
                 prompt: params.prompt,
-                ratio: params.ratio,
+                ratio: params.ratio.clone(),
                 size_tier: params.size_tier,
                 inputs: params.inputs,
                 seed: params.seed,
+                explicit: params.explicit,
+                batch_count: params.count,
                 output_dir: params.output_dir,
                 save_local: params.save_local,
                 max_retries: None,
@@ -116,16 +120,19 @@ fn run_image_job(params: ImageJobParams) -> Result<JobEvent> {
             let size_tier = params.size_tier;
             let inputs = params.inputs.clone();
             let output_dir = params.output_dir.clone();
+            let explicit = params.explicit.clone();
             scope.spawn(move || {
                 let item = match ApiClient::with_overrides(cfg, output_dir.clone(), None, None) {
                     Ok(api) => generate_image(
                         &api,
                         ImageRequest {
                             prompt,
-                            ratio,
+                            ratio: ratio.clone(),
                             size_tier,
                             inputs,
                             seed: None,
+                            explicit,
+                            batch_count: params.count,
                             output_dir,
                             save_local: params.save_local,
                             max_retries: None,
@@ -160,13 +167,14 @@ fn run_video_job(params: VideoJobParams) -> Result<JobEvent> {
             prompt: params.prompt,
             model: Some(params.model),
             mode: None,
-            size: params.size,
+            size: params.size.clone(),
             first_frame: None,
             last_frame: None,
             audios: Vec::new(),
             videos: Vec::new(),
             seed: params.seed,
-            ratio: params.ratio,
+            explicit: params.explicit,
+            ratio: params.ratio.clone(),
             duration: params.duration,
             images: params.images,
             task_id: None,

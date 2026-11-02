@@ -3,6 +3,7 @@ use std::thread;
 
 use anyhow::Result;
 use clap::Args;
+use serde_json::{Value, json};
 
 use crate::api::{ApiClient, ImageRequest, generate_image};
 use crate::cli::util::parse_output_format;
@@ -17,12 +18,12 @@ pub struct ImageArgs {
     pub prompt: String,
 
     /// Aspect ratio (e.g. 16:9, 1:1, 4:3)
-    #[arg(short = 'r', long = "ratio", default_value = "1:1")]
-    pub ratio: String,
+    #[arg(short = 'r', long = "ratio")]
+    pub ratio: Option<String>,
 
     /// Output resolution tier (1K, 2K, 3K, 4K; case-insensitive)
-    #[arg(long = "size", default_value = "1K")]
-    pub size: String,
+    #[arg(long = "size")]
+    pub size: Option<String>,
 
     /// Number of images to generate (concurrent API calls, max 4)
     #[arg(short = 'n', long = "count", default_value_t = 1)]
@@ -64,8 +65,9 @@ pub fn run(args: ImageArgs) -> Result<()> {
     );
 
     let cfg = AppConfig::load()?;
-    let ratio = AspectRatio::parse(&args.ratio)?;
-    let size_tier = ImageResolutionTier::parse(&args.size)?;
+    let explicit = args.request_explicit();
+    let ratio = AspectRatio::parse(args.ratio.as_deref().unwrap_or("1:1"))?;
+    let size_tier = ImageResolutionTier::parse(args.size.as_deref().unwrap_or("1K"))?;
     let output_format = parse_output_format(&args.output_format)?;
 
     if args.count == 1 {
@@ -78,6 +80,8 @@ pub fn run(args: ImageArgs) -> Result<()> {
                 size_tier,
                 inputs: args.inputs.clone(),
                 seed: args.seed,
+                explicit: explicit.clone(),
+                batch_count: args.count,
                 output_dir: args.output_dir.clone(),
                 save_local: args.save,
                 max_retries: args.retries,
@@ -95,6 +99,8 @@ pub fn run(args: ImageArgs) -> Result<()> {
         for _ in 0..args.count {
             let tx = tx.clone();
             let cfg = cfg.clone();
+            let explicit = explicit.clone();
+            let batch_count = args.count;
             let prompt = args.prompt.clone();
             let ratio = ratio.clone();
             let inputs = args.inputs.clone();
@@ -113,6 +119,8 @@ pub fn run(args: ImageArgs) -> Result<()> {
                             size_tier,
                             inputs,
                             seed,
+                            explicit,
+                            batch_count,
                             output_dir,
                             save_local: save,
                             max_retries: retries,
@@ -143,4 +151,35 @@ pub fn run(args: ImageArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+impl ImageArgs {
+    fn request_explicit(&self) -> Value {
+        let mut body = json!({});
+        if let Some(ratio) = &self.ratio {
+            body["ratio"] = json!(ratio);
+        }
+        if let Some(size) = &self.size {
+            body["size"] = json!(size);
+        }
+        body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Command {
+        #[command(flatten)]
+        args: ImageArgs,
+    }
+    #[test]
+    fn omitted_image_options_do_not_become_explicit_overrides() {
+        let omitted = Command::parse_from(["image", "-p", "hello"]).args;
+        assert_eq!(omitted.request_explicit(), json!({}));
+        let explicit = Command::parse_from(["image", "-p", "hello", "--ratio", "1:1", "--size", "1K"]).args;
+        assert_eq!(explicit.request_explicit(), json!({"ratio":"1:1","size":"1K"}));
+    }
 }

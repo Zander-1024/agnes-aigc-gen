@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
 ### Added
 
+- Independent text, image, and video request defaults in optional `request_params.json`, including per-model defaults, recursive object merging, and explicit request overrides.
+- Incremental `config params set/unset/show` commands with JSON Pointer paths; unset defaults remain empty and existing configurations keep their behavior.
+- Effective HTTP parameter snapshots, configuration fingerprints, retry counts, and failures in SQLite; inspect them using `history requests` and `history request <id>`.
 - Video first/last frames and reference images accept local PNG/JPEG/WebP, Base64, and Data URIs, validated and normalized to JPEG Data URIs; audio/video references remain URL-only.
 
 ### Fixed

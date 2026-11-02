@@ -156,6 +156,16 @@ Default `base_url`: `https://apihub.agnes-ai.com`. Existing values ending in `/v
 
 ---
 
+## Request defaults
+
+Optional `{config_dir}/request_params.json` holds independent `text`, `image`, and `video` body defaults, plus per-model defaults. Missing configuration means empty extras. See [SETUP.md](./SETUP.md#optional-request-defaults) for the file schema and management commands.
+
+Precedence: built-in defaults → type defaults → model defaults → explicitly supplied request parameters. Objects merge recursively, preserving unspecified siblings; arrays/scalars replace their own field. Unknown fields pass through to the server. Known fields are validated after merging, including media inputs and Flash limits. Keep model selection and text protocol fields (`messages`, `tools`, `stream`, `stream_options`) in their normal CLI controls.
+
+Use `config params set <text|image|video> <JSON_POINTER> <JSON_VALUE> [--model MODEL]` to update a field; setting an object merges its children. Use `unset` to remove it, or `show` to inspect effective configured defaults. Values are JSON, so string values require JSON quotes. Fixed image seeds also obey the batch seed restriction. Video defaults apply only to creation, never to polling.
+
+`history requests` and `history request <id>` expose redacted effective parameter snapshots, configuration hashes, retry counts, and outcomes. Retries use the same snapshot. An `accepted` media request indicates asynchronous submission succeeded; check its video task separately for completion.
+
 ## Image generation
 
 ```bash

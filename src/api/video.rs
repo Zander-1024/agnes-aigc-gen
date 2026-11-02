@@ -10,6 +10,7 @@ use crate::api::ApiClient;
 use crate::api::deliver::{DeliverOptions, DeliverPayload, deliver_generation};
 use crate::api::error;
 use crate::api::types::{VideoCreateRequest, VideoReference, VideoStatus, VideoTaskResponse};
+use crate::config::RequestKind;
 use crate::db::VideoTaskRecord;
 use crate::media::{parse_image_inputs, resolve_video_image_input};
 use crate::output::{GenerationResult, OutputFormat, download_with_retry, infer_ext_from_url};
@@ -26,6 +27,8 @@ pub struct VideoRequest {
     pub mode: Option<String>,
     pub size: String,
     pub seed: Option<u32>,
+    /// Current caller's explicitly supplied JSON fields.
+    pub explicit: Value,
     pub ratio: AspectRatio,
     pub duration: f64,
     pub images: Vec<String>,
@@ -104,6 +107,32 @@ impl FinalizeOutput {
 }
 
 pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationResult> {
+    api.last_request_id.set(None);
+    let asynchronous = req.async_mode && req.task_id.is_none();
+    let result = generate_video_inner(api, req);
+    if let Some(id) = api.last_request_id.get() {
+        let status = if result.is_err() {
+            "failed"
+        } else if asynchronous {
+            "accepted"
+        } else {
+            "succeeded"
+        };
+        api.db.finish_request_run(
+            id,
+            status,
+            None,
+            result
+                .as_ref()
+                .err()
+                .map(|error| crate::request_log::error_summary(&error.to_string()))
+                .as_deref(),
+        )?;
+    }
+    result
+}
+
+fn generate_video_inner(api: &ApiClient, req: VideoRequest) -> Result<GenerationResult> {
     if let Some(ref query_id) = req.task_id {
         return poll_and_finalize(
             api,
@@ -113,23 +142,34 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     }
 
     let model = req.model.as_deref().unwrap_or(&api.config.video_model);
-    let mut body = build_video_body(&req, model)?;
-    resolve_video_media(api, &mut body)?;
-    let mut input_record = serde_json::to_value(&body)?;
+    let (body, known, config_record) = prepare_video_body(api, &req, model)?;
+    let mut input_record = crate::request_log::redact_credentials(&body);
+    input_record["request_config"] = config_record;
     log::debug!(
         "video create model={} mode={} size={} duration={}s ratio={}",
-        body.model,
-        body.mode,
-        body.size,
-        body.seconds,
-        body.aspect_ratio
+        known.model,
+        known.mode,
+        known.size,
+        known.seconds,
+        known.aspect_ratio
     );
 
-    let resp = api.post_json("videos", &body)?;
+    let metadata = &input_record["request_config"];
+    let layers: Vec<String> = serde_json::from_value(metadata["layers"].clone())?;
+    let resp = api.post_json_with_config(
+        "videos",
+        &body,
+        metadata["hash"].as_str().context("missing video configuration hash")?,
+        &layers,
+    )?;
+    input_record["request_id"] = json!(api.last_request_id.get());
     let resp = ApiClient::ensure_success(resp, "video task creation")?;
     let created = decode_video_response(resp, "parse video create response")?;
     let query_ids = created.query_ids();
     let query_id = query_ids.first().cloned().context("missing video_id/task_id")?;
+    if let Some(id) = api.last_request_id.get() {
+        api.db.link_request_remote_id(id, &query_id)?;
+    }
     record_video_query_ids(&mut input_record, &query_ids, &created);
     log::debug!("video task created, query_id={query_id}");
 
@@ -155,8 +195,8 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
         }
         return Ok(GenerationResult {
             kind: "video".into(),
-            ratio: req.ratio.label(),
-            size: body.size.clone(),
+            ratio: known.aspect_ratio.clone(),
+            size: known.size.clone(),
             uri: String::new(),
             asset_uri: None,
             generation_id: Some(record.id),
@@ -166,7 +206,7 @@ pub fn generate_video(api: &ApiClient, req: VideoRequest) -> Result<GenerationRe
     poll_and_finalize(
         api,
         &query_id,
-        &FinalizeOutput::from_request(&req, req.ratio.label(), body.size, Some(input_record)),
+        &FinalizeOutput::from_request(&req, known.aspect_ratio, known.size, Some(input_record)),
     )
 }
 
@@ -427,6 +467,129 @@ fn recorded_video_model(record: Option<&VideoTaskRecord>) -> Option<&str> {
     record?.input_json.as_ref()?.get("model")?.as_str()
 }
 
+fn prepare_video_body(api: &ApiClient, req: &VideoRequest, model: &str) -> Result<(Value, VideoCreateRequest, Value)> {
+    let base = json!({"model":model,"prompt":req.prompt,"seconds":req.duration.to_string(),"size":req.size,"aspect_ratio":req.ratio.label(),"n":1});
+    let mut explicit = req.explicit.clone();
+    anyhow::ensure!(explicit.is_object(), "explicit video parameters must be an object");
+    explicit["prompt"] = json!(req.prompt);
+    if let Some(mode) = &req.mode {
+        explicit["mode"] = json!(mode);
+    }
+    if let Some(seed) = req.seed {
+        explicit["seed"] = json!(seed);
+    }
+    if let Some(frame) = &req.first_frame {
+        explicit["first_frame"] = json!(frame);
+    }
+    if let Some(frame) = &req.last_frame {
+        explicit["last_frame"] = json!(frame);
+    }
+    if !req.images.is_empty() {
+        explicit["images"] = json!(req.images);
+    }
+    if !req.audios.is_empty() {
+        explicit["audios"] = json!(req.audios);
+    }
+    if !req.videos.is_empty() && explicit.get("videos").is_none() {
+        explicit["videos"] = json!(req.videos);
+    }
+    let resolved = api
+        .config
+        .request_params
+        .resolve(RequestKind::Video, model, &base, &explicit)?;
+    let mut body = resolved.body;
+    let optional_string = |field: &str| -> Result<Option<String>> {
+        body.get(field)
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .with_context(|| format!("video {field} must be a string"))
+            })
+            .transpose()
+    };
+    let strings = |field: &str| -> Result<Vec<String>> {
+        body.get(field)
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .with_context(|| format!("video {field} must be an array of strings"))
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    anyhow::ensure!(body["n"].as_u64() == Some(1), "video n must be 1");
+    let seed = body
+        .get("seed")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .context("video seed must be an unsigned 32-bit integer")
+        })
+        .transpose()?;
+    let effective = VideoRequest {
+        prompt: req.prompt.clone(),
+        model: Some(model.into()),
+        mode: optional_string("mode")?,
+        size: body["size"].as_str().context("video size must be a string")?.into(),
+        seed,
+        explicit: json!({}),
+        ratio: AspectRatio::parse(
+            body["aspect_ratio"]
+                .as_str()
+                .context("video aspect_ratio must be a string")?,
+        )?,
+        duration: body["seconds"]
+            .as_str()
+            .context("video seconds must be a string")?
+            .parse()
+            .context("video seconds must contain a number")?,
+        images: strings("images")?,
+        first_frame: optional_string("first_frame")?,
+        last_frame: optional_string("last_frame")?,
+        audios: strings("audios")?,
+        videos: body
+            .get("videos")
+            .map(|value| serde_json::from_value(value.clone()).context("invalid video reference objects"))
+            .transpose()?
+            .unwrap_or_default(),
+        task_id: None,
+        async_mode: req.async_mode,
+        output_dir: req.output_dir.clone(),
+        save_local: req.save_local,
+        max_retries: req.max_retries,
+        output_format: req.output_format,
+        quiet: req.quiet,
+    };
+    let mut known = build_video_body(&effective, model)?;
+    resolve_video_media(api, &mut known)?;
+    // Preserve vendor fields inside reference-video objects while normalizing known fields.
+    let original_videos = body.get("videos").cloned();
+    for field in ["first_frame", "last_frame", "images", "audios", "videos", "seed"] {
+        body.as_object_mut().unwrap().remove(field);
+    }
+    let canonical = serde_json::to_value(&known)?;
+    for (key, value) in canonical.as_object().unwrap() {
+        body[key] = value.clone();
+    }
+    if let (Some(Value::Array(original)), Some(Value::Array(normalized))) = (original_videos, body.get_mut("videos")) {
+        for (original, normalized) in original.into_iter().zip(normalized) {
+            if let Value::Object(mut map) = original {
+                for (key, value) in normalized.as_object().unwrap() {
+                    map.insert(key.clone(), value.clone());
+                }
+                *normalized = Value::Object(map);
+            }
+        }
+    }
+    Ok((
+        body,
+        known,
+        json!({"hash":resolved.config_hash,"layers":resolved.layers}),
+    ))
+}
+
 fn build_video_body(req: &VideoRequest, model: &str) -> Result<VideoCreateRequest> {
     anyhow::ensure!(
         matches!(model, "agnes-video-2.5" | "agnes-video-2.5-flash"),
@@ -573,6 +736,7 @@ mod tests {
             mode: None,
             size: "720P".into(),
             seed: Some(1101),
+            explicit: json!({}),
             ratio: AspectRatio { w: 16, h: 9 },
             duration: 5.0,
             images: vec![],
@@ -873,11 +1037,17 @@ mod tests {
                 ..crate::config::AppConfig::default()
             },
             api_key: "fixture-key".into(),
+            last_request_id: Default::default(),
             db: crate::db::Database::open_memory().unwrap(),
         }
     }
 
     fn fake_video_create_api() -> (ApiClient, thread::JoinHandle<Value>) {
+        fake_video_create_api_with_response(r#"{"video_id":"task_inline_fixture","status":"queued","progress":0}"#)
+    }
+
+    fn fake_video_create_api_with_response(response: &str) -> (ApiClient, thread::JoinHandle<Value>) {
+        let response = response.to_string();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -914,7 +1084,6 @@ mod tests {
                 request.extend_from_slice(&buffer[..count]);
             }
             let body: Value = serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
-            let response = r#"{"video_id":"task_inline_fixture","status":"queued","progress":0}"#;
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -925,6 +1094,20 @@ mod tests {
             body
         });
         (video_api_at(address), server)
+    }
+
+    #[test]
+    fn malformed_success_responses_finish_the_request_audit_as_failed() {
+        for response in ["{invalid", r#"{"status":"queued"}"#] {
+            let (api, server) = fake_video_create_api_with_response(response);
+            assert!(generate_video(&api, request()).is_err());
+            server.join().unwrap();
+            let run = api.db.get_request_run(api.last_request_id.get().unwrap()).unwrap();
+            assert_eq!(run["status"], "failed");
+            assert_eq!(run["http_status"], 200);
+            assert_eq!(run["attempts"], 1);
+            assert!(api.db.list_video_tasks(1).unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -1002,6 +1185,91 @@ mod tests {
                 .unwrap()["images"],
             body["images"]
         );
+    }
+
+    #[test]
+    fn video_defaults_merge_before_mode_inference_and_preserve_vendor_fields() {
+        let (mut api, server) = fake_video_create_api();
+        let png = inline_image_fixture(image::ImageFormat::Png, "image/png");
+        api.config.request_params=serde_json::from_value(json!({"video":{"body":{"seconds":"8","size":"1080P","aspect_ratio":"9:16","first_frame":png,"vendor":{"keep":true,"changed":"configured","token":"video-private"}},"models":{"agnes-video-2.5-flash":{"body":{"size":"720P","vendor":{"model":true}}}}}})).unwrap();
+        let mut req = request();
+        req.seed = None;
+        req.explicit = json!({"seconds":"4","vendor":{"changed":"explicit"}});
+        let result = generate_video(&api, req).unwrap();
+        let body = server.join().unwrap();
+        assert_eq!(body["mode"], "keyframe");
+        assert_eq!(body["seconds"], "4");
+        assert_eq!(body["size"], "720P");
+        assert_eq!(body["aspect_ratio"], "9:16");
+        assert!(
+            body["first_frame"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
+        assert_eq!(
+            body["vendor"],
+            json!({"keep":true,"changed":"explicit","model":true,"token":"video-private"})
+        );
+        assert_eq!(result.ratio, "9:16");
+        assert_eq!(result.size, "720P");
+        let record = api.db.get_video_task("task_inline_fixture").unwrap();
+        assert_eq!(
+            record.input_json.as_ref().unwrap()["vendor"],
+            crate::request_log::redact_credentials(&body["vendor"])
+        );
+        assert!(
+            !record
+                .input_json
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("video-private")
+        );
+        assert_eq!(record.input_json.as_ref().unwrap()["seconds"], "4");
+        let run = api.db.get_request_run(api.last_request_id.get().unwrap()).unwrap();
+        assert_eq!(run["status"], "accepted");
+        assert_eq!(run["http_status"], 200);
+        assert_eq!(run["remote_id"], "task_inline_fixture");
+        assert!(run["config_layers"].as_array().unwrap().contains(&json!("explicit")));
+        assert!(!run.to_string().contains("video-private"));
+    }
+
+    #[test]
+    fn configured_video_constraints_are_checked_after_merge() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut api = video_api_at(listener.local_addr().unwrap());
+        for patch in [
+            json!({"size":"1080P"}),
+            json!({"seconds":"3"}),
+            json!({"seconds":4}),
+            json!({"mode":"text","images":["https://example.com/image.png"]}),
+        ] {
+            api.config.request_params = serde_json::from_value(json!({"video":{"body":patch}})).unwrap();
+            let mut req = request();
+            req.seed = None;
+            assert!(generate_video(&api, req).is_err());
+            assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        }
+    }
+
+    #[test]
+    fn explicitly_empty_reference_arrays_clear_only_their_configured_fields() {
+        let (mut api, server) = fake_video_create_api();
+        api.config.request_params=serde_json::from_value(json!({"video":{"body":{"images":["https://example.com/configured.png"],"audios":["https://example.com/configured.mp3"],"seconds":"8","seed":42,"vendor":{"keep":true},"vendor_null":null}}})).unwrap();
+        let mut req = request();
+        req.seed = None;
+        req.explicit = json!({"images":[],"audios":[],"videos":[],"seed":null});
+        generate_video(&api, req).unwrap();
+        let body = server.join().unwrap();
+        assert_eq!(body["mode"], "text");
+        assert!(body.get("images").is_none());
+        assert!(body.get("audios").is_none());
+        assert_eq!(body["seconds"], "8");
+        assert_eq!(body["vendor"]["keep"], true);
+        assert!(body.get("seed").is_none());
+        assert!(body.get("vendor_null").unwrap().is_null());
     }
 
     #[test]

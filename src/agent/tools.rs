@@ -290,6 +290,8 @@ fn generate_image_tool(args: Value) -> Result<Value> {
                 size_tier,
                 inputs: inputs.clone(),
                 seed,
+                explicit: media_explicit(&args, false)?,
+                batch_count: count,
                 output_dir: None,
                 save_local: save,
                 max_retries: None,
@@ -344,6 +346,7 @@ fn submit_video_tool(args: Value) -> Result<Value> {
             audios,
             videos,
             seed,
+            explicit: media_explicit(&args, true)?,
             ratio,
             duration,
             images,
@@ -514,12 +517,7 @@ fn optional_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     };
     if let Some(value) = raw.as_str() {
-        return Ok(value
-            .split(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .map(str::to_string)
-            .collect());
+        return crate::media::parse_image_inputs(&[value.to_string()]);
     }
     let items = raw
         .as_array()
@@ -534,9 +532,60 @@ fn optional_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
         .collect()
 }
 
+fn media_explicit(args: &Value, video: bool) -> Result<Value> {
+    let mut body = json!({});
+    for key in ["ratio", "size"] {
+        if let Some(value) = args.get(key) {
+            body[if key == "ratio" && video { "aspect_ratio" } else { key }] = value.clone();
+        }
+    }
+    if video {
+        if let Some(value) = args.get("duration") {
+            body["seconds"] = json!(value.as_f64().context("duration must be a number")?.to_string());
+        }
+        for key in ["images", "audios"] {
+            if args.get(key).is_some() {
+                body[key] = json!(optional_string_array(args, key)?);
+            }
+        }
+        for key in ["videos", "first_frame", "last_frame", "seed"] {
+            if let Some(value) = args.get(key) {
+                body[key] = value.clone();
+            }
+        }
+    } else {
+        if args.get("inputs").is_some() {
+            body["extra_body"]["image"] = json!(optional_string_array(args, "inputs")?);
+        }
+        if let Some(value) = args.get("seed") {
+            body["extra_body"]["seed"] = value.clone();
+        }
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_media_arrays_distinguish_omission_from_empty_values() {
+        assert_eq!(media_explicit(&json!({"prompt":"hello"}), false).unwrap(), json!({}));
+        assert_eq!(media_explicit(&json!({"prompt":"hello"}), true).unwrap(), json!({}));
+        assert_eq!(
+            media_explicit(&json!({"inputs":[]}), false).unwrap(),
+            json!({"extra_body":{"image":[]}})
+        );
+        assert_eq!(
+            media_explicit(&json!({"images":[],"audios":[],"videos":[]}), true).unwrap(),
+            json!({"images":[],"audios":[],"videos":[]})
+        );
+        let uri = "data:image/jpeg;base64,YWJj";
+        assert_eq!(
+            media_explicit(&json!({"inputs":uri}), false).unwrap(),
+            json!({"extra_body":{"image":[uri]}})
+        );
+    }
 
     #[test]
     fn agent_tools_include_agnes_media_tools() {

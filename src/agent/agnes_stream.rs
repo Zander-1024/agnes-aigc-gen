@@ -19,6 +19,12 @@ const CHAT_REQUEST_MAX_ATTEMPTS: u32 = 3;
 pub struct AgnesStreamOptions {
     pub stream: StreamOptions,
     pub enable_thinking: bool,
+    pub request_body: Value,
+    pub request_config_hash: String,
+    pub request_layers: Vec<String>,
+    pub record_requests: bool,
+    pub session_id: Option<String>,
+    pub turn: Option<u32>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -115,11 +121,54 @@ pub async fn stream_agnes(
     let url = crate::api::endpoints::v1_endpoint(&base_url, "chat/completions")
         .map_err(|err| Error::Other(format!("invalid Agnes base URL: {err:#}")))?;
     let body = build_chat_body(model, context, options);
+    crate::logging::log_request("POST", &url, Some(&body));
+    log::debug!(
+        "request config_hash={} layers={:?}",
+        options.request_config_hash,
+        options.request_layers
+    );
+    let mut request_log = if options.record_requests {
+        Some(
+            crate::request_log::RequestLog::start(
+                "text",
+                &model.id,
+                &url,
+                &options.request_config_hash,
+                &options.request_layers,
+                &body,
+            )
+            .map_err(|err| Error::Other(format!("record text request: {err:#}")))?,
+        )
+    } else {
+        None
+    };
+    if let Some(log) = &request_log {
+        log::debug!("request_id={}", log.id());
+    }
+    if let Some(log) = &mut request_log {
+        log.context(options.session_id.as_deref(), options.turn)
+            .map_err(|err| Error::Other(format!("record text request context: {err:#}")))?;
+    }
     let cancel = options.stream.cancel.clone();
     let headers = options.stream.headers.clone();
     let client = reqwest::Client::new();
 
-    let resp = send_chat_request_with_retries(&client, &url, &api_key, &headers, &body).await?;
+    let resp = match send_chat_request_with_retries(&client, &url, &api_key, &headers, &body, &mut request_log).await {
+        Ok(response) => response,
+        Err(error) => {
+            let status = match &error {
+                Error::ProviderError { status, .. } => Some(*status),
+                _ => None,
+            };
+            record_request_failure(&mut request_log, &error.to_string(), status);
+            return Err(error);
+        }
+    };
+    if let Some(log) = &mut request_log
+        && let Err(error) = log.response_status(resp.status().as_u16())
+    {
+        log::warn!("record text response status: {error:#}");
+    }
 
     let api = model.api.clone();
     let provider = model.provider.clone();
@@ -150,6 +199,7 @@ pub async fn stream_agnes(
             let ev = match ev {
                 Ok(e) => e,
                 Err(e) => {
+                    record_request_failure(&mut request_log, &format!("sse: {e}"), None);
                     yield Err(Error::InvalidResponse(format!("sse: {e}")));
                     return;
                 }
@@ -312,6 +362,12 @@ pub async fn stream_agnes(
             error_message: None,
             timestamp: pi_ai::now_ms(),
         };
+        if let Some(log) = &mut request_log
+            && let Err(error) = log.success(None)
+        {
+            yield Err(Error::Other(format!("record completed text request: {error:#}")));
+            return;
+        }
         yield Ok(AssistantMessageEvent::Done {
             reason: stop,
             message,
@@ -327,9 +383,14 @@ async fn send_chat_request_with_retries(
     api_key: &str,
     headers: &BTreeMap<String, String>,
     body: &Value,
+    request_log: &mut Option<crate::request_log::RequestLog>,
 ) -> pi_ai::Result<Response> {
     let mut last_retryable_error: Option<Error> = None;
     for attempt in 1..=CHAT_REQUEST_MAX_ATTEMPTS {
+        if let Some(log) = request_log {
+            log.attempt()
+                .map_err(|err| Error::Other(format!("record text request attempt: {err:#}")))?;
+        }
         let mut req = client
             .post(url)
             .bearer_auth(api_key)
@@ -368,6 +429,14 @@ async fn send_chat_request_with_retries(
     Err(last_retryable_error.unwrap_or_else(|| Error::InvalidResponse("chat request retry exhausted".into())))
 }
 
+fn record_request_failure(log: &mut Option<crate::request_log::RequestLog>, error: &str, status: Option<u16>) {
+    if let Some(log) = log
+        && let Err(record_error) = log.failure(error, status)
+    {
+        log::warn!("record failed text request: {record_error:#}");
+    }
+}
+
 pub fn build_chat_body(model: &Model, context: &Context, options: &AgnesStreamOptions) -> Value {
     let mut body = json!({
         "model": model.id,
@@ -400,6 +469,9 @@ pub fn build_chat_body(model: &Model, context: &Context, options: &AgnesStreamOp
             })
             .collect();
         body["tools"] = json!(tools);
+    }
+    if options.request_body.is_object() {
+        crate::config::deep_merge(&mut body, &options.request_body);
     }
     body
 }
@@ -508,6 +580,7 @@ mod tests {
         let options = AgnesStreamOptions {
             stream: StreamOptions { max_tokens: Some(65_536), ..StreamOptions::default() },
             enable_thinking: true,
+            ..AgnesStreamOptions::default()
         };
 
         let body = build_chat_body(&model, &ctx, &options);
@@ -535,6 +608,25 @@ mod tests {
 
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["function"]["name"], "agnes_task_list");
+    }
+
+    #[test]
+    fn empty_request_defaults_preserve_the_existing_chat_wire_body() {
+        use crate::agent::chat::{ChatOverrides, ChatRuntimeConfig};
+        for thinking in [false, true] {
+            let cfg = crate::config::AppConfig { chat_thinking: thinking, ..crate::config::AppConfig::default() };
+            let runtime = ChatRuntimeConfig::from_app_config(&cfg, ChatOverrides::default()).unwrap();
+            let legacy_options = AgnesStreamOptions {
+                stream: runtime.stream.clone(),
+                enable_thinking: runtime.enable_thinking,
+                ..AgnesStreamOptions::default()
+            };
+            let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
+            assert_eq!(
+                build_chat_body(&runtime.model, &ctx, &runtime.stream_options()),
+                build_chat_body(&runtime.model, &ctx, &legacy_options)
+            );
+        }
     }
 
     #[test]
@@ -588,6 +680,7 @@ mod tests {
                 ..StreamOptions::default()
             },
             enable_thinking: false,
+            ..AgnesStreamOptions::default()
         };
         let mut stream = stream_agnes(&model, &ctx, &options).await.unwrap();
         while let Some(event) = stream.next().await {
@@ -610,6 +703,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_keeps_configured_siblings_and_unknown_fields_across_explicit_overrides_and_retries() {
+        use crate::agent::chat::{ChatOverrides, ChatRuntimeConfig};
+        let server = RetryServer::spawn(vec![503, 200]);
+        let mut cfg = crate::config::AppConfig {
+            base_url: server.base_url(),
+            request_params: serde_json::from_value(json!({
+                "text": {
+                    "body": {
+                        "temperature": 0.4,
+                        "top_p": 0.9,
+                        "max_tokens": 1000,
+                        "chat_template_kwargs": {"enable_thinking": true, "vendor_mode": "keep"},
+                        "vendor_option": {"enabled": true},
+                        "nullable_option": null
+                    },
+                    "models": {"agnes-3.0-flash": {"body": {"chat_template_kwargs": {"model_option": "retain"}}}}
+                }
+            }))
+            .unwrap(),
+            ..crate::config::AppConfig::default()
+        };
+        let runtime = ChatRuntimeConfig::from_app_config(
+            &cfg,
+            ChatOverrides { thinking: Some(false), max_output_tokens: Some(2048), ..ChatOverrides::default() },
+        )
+        .unwrap()
+        .with_api_key("test-key".into());
+        // Configuration changes after starting a run must not affect its retries.
+        cfg.request_params.text.body["vendor_option"]["enabled"] = json!(false);
+        let mut options = runtime.stream_options();
+        options.record_requests = false;
+        let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
+        let mut stream = stream_agnes(&runtime.model, &ctx, &options).await.unwrap();
+        while let Some(event) = stream.next().await {
+            if matches!(event.unwrap(), AssistantMessageEvent::Done { .. }) {
+                break;
+            }
+        }
+        let bodies = server.requests();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(
+            bodies[0], bodies[1],
+            "retry must send the same resolved parameter snapshot"
+        );
+        let body = &bodies[0];
+        assert_eq!(body["max_tokens"], 2048);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(body["chat_template_kwargs"]["vendor_mode"], "keep");
+        assert_eq!(body["chat_template_kwargs"]["model_option"], "retain");
+        assert_eq!(body["temperature"], 0.4);
+        assert_eq!(body["top_p"], 0.9);
+        assert_eq!(body["vendor_option"]["enabled"], true);
+        assert!(body.get("nullable_option").is_some_and(Value::is_null));
+        assert_eq!(body["messages"][0]["content"], "hello");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[tokio::test]
     async fn stream_uses_versioned_chat_endpoint_for_gateway_and_v1_bases() {
         for suffix in ["", "/", "/v1", "/v1/"] {
             for override_base in [false, true] {
@@ -623,6 +775,7 @@ mod tests {
                         ..StreamOptions::default()
                     },
                     enable_thinking: false,
+                    ..AgnesStreamOptions::default()
                 };
                 let ctx = Context { system_prompt: None, messages: vec![Message::user_text("hello")], tools: vec![] };
                 let mut stream = stream_agnes(&model, &ctx, &options).await.unwrap();
@@ -653,6 +806,7 @@ mod tests {
                 ..StreamOptions::default()
             },
             enable_thinking: false,
+            ..AgnesStreamOptions::default()
         };
 
         let mut stream = stream_agnes(&model, &ctx, &options).await.unwrap();
@@ -681,6 +835,7 @@ mod tests {
                 ..StreamOptions::default()
             },
             enable_thinking: false,
+            ..AgnesStreamOptions::default()
         };
 
         let err = match stream_agnes(&model, &ctx, &options).await {

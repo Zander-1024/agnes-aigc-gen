@@ -9,6 +9,7 @@ mod logging;
 mod media;
 mod output;
 mod ratio;
+mod request_log;
 mod retry;
 mod ui;
 

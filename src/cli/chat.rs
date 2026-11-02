@@ -87,11 +87,12 @@ async fn run_prompt(args: ChatArgs) -> Result<()> {
     } else {
         ApprovalPolicy::default_review(workspace)
     }));
-    let agent = build_agent_config(&cfg, args.overrides(), args.max_turns, permission, &[])?;
+    let mut agent = build_agent_config(&cfg, args.overrides(), args.max_turns, permission, &[])?;
     let mut session = match args.resume.as_deref() {
         Some(id) => load_session(id)?,
         None => ChatSession::new(&agent.runtime.model.id, agent.runtime.enable_thinking),
     };
+    agent.runtime.session_id = Some(session.id.clone());
     let mut history = session.messages.clone();
     history.push(message);
 
